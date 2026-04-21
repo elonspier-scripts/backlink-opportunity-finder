@@ -1,0 +1,6 @@
+streamlit
+apify-client
+pandas
+requests
+beautifulsoup4
+openai
