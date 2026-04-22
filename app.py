@@ -11,12 +11,13 @@ from openai import OpenAI
 # Pagina instellingen
 st.set_page_config(page_title="SEO Linkbuilding Finder", layout="wide")
 
-# 2. CONSTANTEN (PLAATS DE LIJST HIER)
+# 2. CONSTANTEN
 SOCIAL_DOMAINS = {
     "youtube.com", "facebook.com", "instagram.com", "linkedin.com", 
     "twitter.com", "x.com", "pinterest.com", "tiktok.com", 
     "vimeo.com", "reddit.com", "wikipedia.org", "google.com",
     "apple.com", "microsoft.com", "bol.com", "nu.nl"
+}
 
 st.title("🚀 AI Backlink Opportunity Finder")
 st.markdown("Vind exclusieve partnerpagina's en analyseer ze direct met AI.")
@@ -26,7 +27,6 @@ st.markdown("Vind exclusieve partnerpagina's en analyseer ze direct met AI.")
 # ========================================================
 st.sidebar.header("🔑 API Configuratie")
 
-# Gebruik secrets als ze bestaan, anders tekstvelden
 api_token = st.sidebar.text_input("Apify API Token", type="password", value=st.secrets.get("APIFY", ""))
 oa_token = st.sidebar.text_input("OpenAI API Key", type="password", value=st.secrets.get("OPENAI", ""))
 
@@ -37,11 +37,9 @@ pages = st.sidebar.slider("Aantal pagina's diep", 1, 3, 2)
 
 st.sidebar.divider()
 st.sidebar.header("🌍 Lokalisatie")
-# Gebruiker kan hier zelf de termen invoeren (gescheiden door komma's)
 default_terms = "partner, adverteren, samenwerken, samenwerking, gastblog, advertise"
-partner_terms_input = st.sidebar.text_area("Partner-termen (gescheiden door komma's)", value=default_terms, help="Woorden die in de linktekst moeten staan om de partnerpagina te vinden.")
+partner_terms_input = st.sidebar.text_area("Partner-termen (gescheiden door komma's)", value=default_terms, help="Woorden die in de linktekst moeten staan.")
 
-# Maak een lijst van de input
 PARTNER_TERMS = [t.strip().lower() for t in partner_terms_input.split(",") if t.strip()]
 
 # ========================================================
@@ -92,11 +90,9 @@ def ai_analyze(text, url, ai_client):
 
 def process_site(home_url, ai_client, search_terms):
     try:
-        # 1. Bezoek homepage
         res = requests.get(home_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 2. Zoek partner link
         partner_url = None
         for link in soup.find_all('a', href=True):
             link_text = link.get_text().lower()
@@ -107,7 +103,6 @@ def process_site(home_url, ai_client, search_terms):
         if not partner_url: 
             return None
 
-        # 3. Bezoek partnerpagina
         res_p = requests.get(partner_url, timeout=10)
         p_soup = BeautifulSoup(res_p.text, 'html.parser')
         p_text = p_soup.get_text()
@@ -128,7 +123,6 @@ if st.button("🚀 Start Analyse", type="primary"):
     elif not PARTNER_TERMS:
         st.error("Voer ten minste één partner-term in de sidebar in.")
     else:
-        # Domeinen inladen
         try:
             if uploaded_file.name.endswith('.csv'):
                 df_ex = pd.read_csv(uploaded_file)
@@ -159,6 +153,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.stop()
 
             st.write(f"🔎 Domeinen filteren en scannen op termen: {', '.join(PARTNER_TERMS)}...")
+            
             for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
                 kw = item.get('searchQuery', {}).get('term') or "Onbekend"
                 
@@ -166,9 +161,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                     url = result.get('url')
                     dom = extract_domain(url)
                     
-# --- GECOMBINEERDE FILTER LOGICA ---
-                    # 1. Check of het domein al eerder is verwerkt (existing)
-                    # 2. Check of het domein in de uitgesloten social media lijst staat
+                    # --- GECOMBINEERDE FILTER LOGICA ---
                     if dom not in existing and dom not in SOCIAL_DOMAINS:
                         st.write(f"Nieuw relevant domein gevonden via '{kw}': **{dom}**. Partner-check...")
                         
@@ -181,15 +174,11 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 "AI Potentie": analysis['ai'],
                                 "Emails": analysis['emails']
                             })
-                            # Onthoud dit domein om duplicaten bij andere keywords te voorkomen
                             existing.add(dom) 
                         else:
-                            # Ook als er geen partnerpagina is gevonden, toevoegen aan existing
-                            # zodat we deze site bij een volgend keyword niet opnieuw scrapen
                             existing.add(dom)
                     
                     elif dom in SOCIAL_DOMAINS:
-                        # Social media domeinen worden stilletjes overgeslagen
                         continue
 
             status.update(label="Analyse voltooid!", state="complete")
