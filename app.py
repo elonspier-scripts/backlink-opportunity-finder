@@ -171,6 +171,14 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 "AI Potentie": analysis['ai'],
                                 "Emails": analysis['emails']
                             })
+                            # VOEG TOE AAN EXISTING: Voorkomt dat hetzelfde domein 
+                            # bij een ander keyword opnieuw wordt verwerkt.
+                            existing.add(dom) 
+                        else:
+                            # Ook als er geen partnerpagina is gevonden, voegen we het domein toe
+                            # zodat we niet bij elk keyword opnieuw de site hoeven te scrapen.
+                            existing.add(dom)
+                            
             status.update(label="Analyse voltooid!", state="complete")
 
         if opportunities:
