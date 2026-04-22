@@ -11,6 +11,13 @@ from openai import OpenAI
 # Pagina instellingen
 st.set_page_config(page_title="SEO Linkbuilding Finder", layout="wide")
 
+# 2. CONSTANTEN (PLAATS DE LIJST HIER)
+SOCIAL_DOMAINS = {
+    "youtube.com", "facebook.com", "instagram.com", "linkedin.com", 
+    "twitter.com", "x.com", "pinterest.com", "tiktok.com", 
+    "vimeo.com", "reddit.com", "wikipedia.org", "google.com",
+    "apple.com", "microsoft.com", "bol.com", "nu.nl"
+
 st.title("🚀 AI Backlink Opportunity Finder")
 st.markdown("Vind exclusieve partnerpagina's en analyseer ze direct met AI.")
 
@@ -159,9 +166,12 @@ if st.button("🚀 Start Analyse", type="primary"):
                     url = result.get('url')
                     dom = extract_domain(url)
                     
-                    if dom not in existing:
-                        st.write(f"Nieuw domein: **{dom}**. Partner-check...")
-                        # Geef de PARTNER_TERMS mee aan de functie
+# --- GECOMBINEERDE FILTER LOGICA ---
+                    # 1. Check of het domein al eerder is verwerkt (existing)
+                    # 2. Check of het domein in de uitgesloten social media lijst staat
+                    if dom not in existing and dom not in SOCIAL_DOMAINS:
+                        st.write(f"Nieuw relevant domein gevonden via '{kw}': **{dom}**. Partner-check...")
+                        
                         analysis = process_site(url, openai_c, PARTNER_TERMS)
                         if analysis:
                             opportunities.append({
@@ -171,14 +181,17 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 "AI Potentie": analysis['ai'],
                                 "Emails": analysis['emails']
                             })
-                            # VOEG TOE AAN EXISTING: Voorkomt dat hetzelfde domein 
-                            # bij een ander keyword opnieuw wordt verwerkt.
+                            # Onthoud dit domein om duplicaten bij andere keywords te voorkomen
                             existing.add(dom) 
                         else:
-                            # Ook als er geen partnerpagina is gevonden, voegen we het domein toe
-                            # zodat we niet bij elk keyword opnieuw de site hoeven te scrapen.
+                            # Ook als er geen partnerpagina is gevonden, toevoegen aan existing
+                            # zodat we deze site bij een volgend keyword niet opnieuw scrapen
                             existing.add(dom)
-                            
+                    
+                    elif dom in SOCIAL_DOMAINS:
+                        # Social media domeinen worden stilletjes overgeslagen
+                        continue
+
             status.update(label="Analyse voltooid!", state="complete")
 
         if opportunities:
