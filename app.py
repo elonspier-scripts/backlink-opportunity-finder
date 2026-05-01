@@ -11,7 +11,7 @@ from openai import OpenAI
 # Pagina instellingen
 st.set_page_config(page_title="SEO Linkbuilding Finder", layout="wide")
 
-# 2. CONSTANTEN
+# Sociale domeinen om over te slaan
 SOCIAL_DOMAINS = {
     "youtube.com", "facebook.com", "instagram.com", "linkedin.com", 
     "twitter.com", "x.com", "pinterest.com", "tiktok.com", 
@@ -36,11 +36,40 @@ target_domain = st.sidebar.selectbox("Google Domein", ["google.nl", "google.be",
 pages = st.sidebar.slider("Aantal pagina's diep", 1, 3, 2)
 
 st.sidebar.divider()
-st.sidebar.header("🌍 Lokalisatie")
-default_terms = "partner, adverteren, samenwerken, samenwerking, gastblog, advertise"
-partner_terms_input = st.sidebar.text_area("Partner-termen (gescheiden door komma's)", value=default_terms, help="Woorden die in de linktekst moeten staan.")
+st.sidebar.header("🌍 Partner Termen & Talen")
 
-PARTNER_TERMS = [t.strip().lower() for t in partner_terms_input.split(",") if t.strip()]
+# Hardcoded termen per taal
+language_options = {
+    "Nederlands 🇳🇱": ["partner", "adverteren", "samenwerken", "gastblog"],
+    "English 🇬🇧": ["partner", "advertise", "collaborate", "guest post"],
+    "Deutsch 🇩🇪": ["partner", "werben", "zusammenarbeit", "gastbeitrag"],
+    "Français 🇫🇷": ["partenaire", "publicité", "collaborer", "article invité"]
+}
+
+# Meerdere talen selecteren
+selected_langs = st.sidebar.multiselect(
+    "Selecteer talen voor automatische termen:",
+    options=list(language_options.keys()),
+    default=["Nederlands 🇳🇱", "English 🇬🇧"]
+)
+
+# Optie voor eigen termen
+custom_terms_input = st.sidebar.text_input("Extra eigen termen (komma gescheiden):", placeholder="affiliate, samenwerking")
+
+# Samenvoegen van alle termen
+PARTNER_TERMS = []
+for lang in selected_langs:
+    PARTNER_TERMS.extend(language_options[lang])
+
+if custom_terms_input:
+    extra_list = [t.strip().lower() for t in custom_terms_input.split(",") if t.strip()]
+    PARTNER_TERMS.extend(extra_list)
+
+# Uniek maken en opschonen
+PARTNER_TERMS = list(set([t.lower() for t in PARTNER_TERMS]))
+
+with st.sidebar.expander("Actieve zoektermen"):
+    st.write(PARTNER_TERMS)
 
 # ========================================================
 # 2. INPUT SECTIE (HOOFDSCHERM)
@@ -52,7 +81,7 @@ with col1:
     keywords_area = st.text_area("Plak keywords (onder elkaar)", height=150, placeholder="hardloopschoenen kopen\nmarathon tips")
 
 with col2:
-    st.subheader("Stap 2: Uitsluitingen")
+    st.subheader("Stap 2: Uitsluitingen (Optioneel)")
     uploaded_file = st.file_uploader("Upload huidige referring domains (CSV/TXT)", type=['csv', 'txt'])
 
 # ========================================================
@@ -68,15 +97,18 @@ def ai_analyze(text, url, ai_client):
     try:
         clean_text = text[:2000]
         prompt = f"""
-        Je bent een inkoper voor link building. Analyseer de tekst van deze specifieke 'Partner/Adverteer' pagina: {url}
+        Je bent een SEO-expert. Analyseer de tekst van deze specifieke 'Partner/Adverteer' pagina: {url}
         
         Tekst: {clean_text} 
 
-        doe het volgende:
-        - Geef korte samenvatting van de pagina en licht kort toe wat de mogelijkheden zijn.
+        Beantwoord de volgende punten:
+        1. Is dit een relevante plek voor linkbuilding (gastblog, linkplaatsing)?
+        2. Worden er specifieke eisen gesteld of tarieven genoemd? 
+        3. Geef korte samenvatting van de pagina.
+        4. Geef een score (0-10) voor de kans op succesvolle outreach.
 
         Output formaat:
-        SCORE: [X/10] | TYPE: [bijv. Gastblog/Betaald] | ANALYSE: [Korte uitleg, max. 2 korte zinnen in bulletpoints onder elkaar.]
+        SCORE: [X/10] | TYPE: [bijv. Gastblog/Betaald] | ANALYSE: [Korte uitleg, max. 3 korte zinnen in bulletpoints onder elkaar.]
         """
         
         response = ai_client.chat.completions.create(
@@ -118,33 +150,26 @@ def process_site(home_url, ai_client, search_terms):
 # 4. RUNNER
 # ========================================================
 if st.button("🚀 Start Analyse", type="primary"):
-    # REMOVED: 'not uploaded_file' from the validation check
     if not api_token or not oa_token or not keywords_area:
         st.error("Vul alle API keys in en voer keywords in.")
     elif not PARTNER_TERMS:
-        st.error("Voer ten minste één partner-term in de sidebar in.")
+        st.error("Selecteer ten minste één taal of voer een eigen term in.")
     else:
-        # Initialize an empty set for existing domains so the code doesn't crash
         existing = set()
 
-        # Only process the file if the user actually uploaded one
+        # Bestand verwerken indien geüpload
         if uploaded_file is not None:
             try:
                 if uploaded_file.name.endswith('.csv'):
                     df_ex = pd.read_csv(uploaded_file)
-                    # We take the first column and clean the domains
                     existing = set(df_ex[df_ex.columns[0]].dropna().apply(extract_domain))
                 else:
-                    # Logic for .txt files
                     existing = {extract_domain(line.decode().strip()) for line in uploaded_file if line.strip()}
-                st.info(f"📁 {len(existing)} bestaande domeinen ingeladen om te negeren.")
+                st.info(f"📁 {len(existing)} bestaande domeinen ingeladen om over te slaan.")
             except Exception as e:
                 st.error(f"Fout bij inladen bestand: {e}")
                 st.stop()
-        else:
-            st.info("ℹ️ Geen uitsluitingslijst geüpload. Alle gevonden resultaten worden geanalyseerd.")
-
-        # API Clients setup
+        
         apify = ApifyClient(api_token)
         openai_c = OpenAI(api_key=oa_token)
         
@@ -164,7 +189,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.error(f"Apify call mislukt: {e}")
                 st.stop()
 
-            st.write(f"🔎 Domeinen filteren en scannen op termen: {', '.join(PARTNER_TERMS)}...")
+            st.write(f"🔎 Domeinen filteren en scannen op partnerpagina's...")
             
             for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
                 kw = item.get('searchQuery', {}).get('term') or "Onbekend"
@@ -173,9 +198,8 @@ if st.button("🚀 Start Analyse", type="primary"):
                     url = result.get('url')
                     dom = extract_domain(url)
                     
-                    # Logica: check if domain is NOT in exclusions AND NOT a social media site
                     if dom not in existing and dom not in SOCIAL_DOMAINS:
-                        st.write(f"Nieuw relevant domein gevonden via '{kw}': **{dom}**. Partner-check...")
+                        st.write(f"Nieuw domein gevonden via '{kw}': **{dom}**. Partner-check...")
                         
                         analysis = process_site(url, openai_c, PARTNER_TERMS)
                         if analysis:
@@ -189,17 +213,13 @@ if st.button("🚀 Start Analyse", type="primary"):
                             existing.add(dom) 
                         else:
                             existing.add(dom)
-                    
-                    elif dom in SOCIAL_DOMAINS:
-                        continue
-
+            
             status.update(label="Analyse voltooid!", state="complete")
 
-        # Display results
         if opportunities:
             df_final = pd.DataFrame(opportunities)
             st.success(f"{len(df_final)} Kansen gevonden!")
             st.dataframe(df_final, use_container_width=True)
             st.download_button("Download Resultaten (CSV)", df_final.to_csv(index=False), "backlink_kansen.csv", "text/csv")
         else:
-            st.warning("Now opportunities found")
+            st.warning("Geen nieuwe domeinen met partnerpagina's gevonden.")
