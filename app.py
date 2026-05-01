@@ -118,21 +118,33 @@ def process_site(home_url, ai_client, search_terms):
 # 4. RUNNER
 # ========================================================
 if st.button("🚀 Start Analyse", type="primary"):
-    if not api_token or not oa_token or not uploaded_file or not keywords_area:
-        st.error("Vul alle API keys in, upload een bestand en voer keywords in.")
+    # REMOVED: 'not uploaded_file' from the validation check
+    if not api_token or not oa_token or not keywords_area:
+        st.error("Vul alle API keys in en voer keywords in.")
     elif not PARTNER_TERMS:
         st.error("Voer ten minste één partner-term in de sidebar in.")
     else:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df_ex = pd.read_csv(uploaded_file)
-                existing = set(df_ex[df_ex.columns[0]].apply(extract_domain))
-            else:
-                existing = {extract_domain(line.decode()) for line in uploaded_file if line.strip()}
-        except Exception as e:
-            st.error(f"Fout bij inladen bestand: {e}")
-            st.stop()
+        # Initialize an empty set for existing domains so the code doesn't crash
+        existing = set()
 
+        # Only process the file if the user actually uploaded one
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df_ex = pd.read_csv(uploaded_file)
+                    # We take the first column and clean the domains
+                    existing = set(df_ex[df_ex.columns[0]].dropna().apply(extract_domain))
+                else:
+                    # Logic for .txt files
+                    existing = {extract_domain(line.decode().strip()) for line in uploaded_file if line.strip()}
+                st.info(f"📁 {len(existing)} bestaande domeinen ingeladen om te negeren.")
+            except Exception as e:
+                st.error(f"Fout bij inladen bestand: {e}")
+                st.stop()
+        else:
+            st.info("ℹ️ Geen uitsluitingslijst geüpload. Alle gevonden resultaten worden geanalyseerd.")
+
+        # API Clients setup
         apify = ApifyClient(api_token)
         openai_c = OpenAI(api_key=oa_token)
         
@@ -161,7 +173,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                     url = result.get('url')
                     dom = extract_domain(url)
                     
-                    # --- GECOMBINEERDE FILTER LOGICA ---
+                    # Logica: check if domain is NOT in exclusions AND NOT a social media site
                     if dom not in existing and dom not in SOCIAL_DOMAINS:
                         st.write(f"Nieuw relevant domein gevonden via '{kw}': **{dom}**. Partner-check...")
                         
@@ -183,10 +195,11 @@ if st.button("🚀 Start Analyse", type="primary"):
 
             status.update(label="Analyse voltooid!", state="complete")
 
+        # Display results
         if opportunities:
             df_final = pd.DataFrame(opportunities)
             st.success(f"{len(df_final)} Kansen gevonden!")
             st.dataframe(df_final, use_container_width=True)
             st.download_button("Download Resultaten (CSV)", df_final.to_csv(index=False), "backlink_kansen.csv", "text/csv")
         else:
-            st.warning("Geen nieuwe domeinen met partnerpagina's gevonden.")
+            st.warning("Now opportunities found")
