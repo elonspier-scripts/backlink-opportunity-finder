@@ -14,7 +14,7 @@ from openai import OpenAI
 st.set_page_config(page_title="SEO & Lead Finder", layout="wide")
 
 SOCIAL_DOMAINS = {
-    "youtube.com", "facebook.com", "instagram.com", "linkedin.com", 
+    "youtube.com", "facebook.com", "instagram.com", "linkedin.com", "linkedin.nl", 
     "twitter.com", "x.com", "pinterest.com", "tiktok.com", 
     "vimeo.com", "reddit.com", "wikipedia.org", "google.com",
     "apple.com", "microsoft.com", "bol.com", "nu.nl"
