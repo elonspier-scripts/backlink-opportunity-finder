@@ -124,9 +124,22 @@ def ai_analyze(text, url, ai_client):
         return f"AI Analyse mislukt: {str(e)}"
 
 def process_site(home_url, ai_client, search_terms):
+    result_data = {"url": None, "ai": None, "emails": "", "wat_verkoopt": "Geen beschrijving"}
     try:
         res = requests.get(home_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
+        
+        try:
+            home_text = soup.get_text(separator=' ', strip=True)[:1500]
+            prompt = f"Geef in exact 1 korte zin aan wat dit bedrijf doet of verkoopt. Baseer je op deze website tekst: {home_text}"
+            ai_summary = ai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            result_data["wat_verkoopt"] = ai_summary.choices[0].message.content.strip()
+        except:
+            pass 
         
         partner_url = None
         for link in soup.find_all('a', href=True):
@@ -135,7 +148,8 @@ def process_site(home_url, ai_client, search_terms):
                 partner_url = urljoin(home_url, link['href'])
                 break
         
-        if not partner_url: return None
+        if not partner_url: 
+            return result_data
 
         res_p = requests.get(partner_url, timeout=10)
         p_soup = BeautifulSoup(res_p.text, 'html.parser')
@@ -143,9 +157,14 @@ def process_site(home_url, ai_client, search_terms):
         
         emails = list(set(re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", p_text, re.I)))
         ai_res = ai_analyze(p_text, partner_url, ai_client)
-        return {"url": partner_url, "ai": ai_res, "emails": ", ".join(emails[:3])}
+
+        result_data["url"] = partner_url
+        result_data["ai"] = ai_res
+        result_data["emails"] = ", ".join(emails[:3])
+        
+        return result_data
     except:
-        return None
+        return result_data
 
 def get_maps_categories(keyword, ai_client):
     try:
@@ -241,17 +260,17 @@ if st.button("🚀 Start Analyse", type="primary"):
                             maps_emails = item.get('emails', [])
                             maps_phone = item.get('phoneUnformatted', item.get('phone', 'Geen'))
                             
-                            # Dubbelcheck of deze Maps lead ook een partner pagina heeft
                             analysis = process_site(website, openai_c, PARTNER_TERMS)
                             
                             opportunities.append({
                                 "Bedrijf": title,
+                                "Wat Verkoopt": analysis['wat_verkoopt'] if analysis else "Kan website niet scannen",
                                 "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
                                 "Domain": dom,
                                 "Telefoon": maps_phone,
-                                "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis else ""),
-                                "Partner URL": analysis['url'] if analysis else "Geen partnerpagina",
-                                "AI Potentie": analysis['ai'] if analysis else "Geen partnerpagina gevonden"
+                                "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
+                                "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
+                                "AI Potentie": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
                             })
                             existing.add(dom)
 
@@ -281,9 +300,11 @@ if st.button("🚀 Start Analyse", type="primary"):
                         if dom not in existing and dom not in SOCIAL_DOMAINS:
                             st.write(f"Nieuw domein gevonden via '{kw}': **{dom}**. Partner-check...")
                             analysis = process_site(url, openai_c, PARTNER_TERMS)
-                            if analysis:
+                            
+                            if analysis and analysis['url']:
                                 opportunities.append({
                                     "Bedrijf": "N/A (SEO Resultaat)",
+                                    "Wat Verkoopt": analysis['wat_verkoopt'],
                                     "Keyword/Categorie": kw,
                                     "Domain": dom,
                                     "Telefoon": "N/A",
@@ -302,8 +323,7 @@ if st.button("🚀 Start Analyse", type="primary"):
         # ========================================================
         if opportunities:
             df_final = pd.DataFrame(opportunities)
-            # Kolommen ordenen voor een strakke tabel
-            df_final = df_final[["Bedrijf", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "AI Potentie"]]
+            df_final = df_final[["Bedrijf", "Wat Verkoopt", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "AI Potentie"]]
             
             st.success(f"{len(df_final)} Kansen gevonden!")
             st.dataframe(df_final, use_container_width=True)
