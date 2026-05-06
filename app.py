@@ -94,13 +94,23 @@ with col2:
 # 3. LOGICA FUNCTIES
 # ========================================================
 
+
+# --- GEÜPDATE: Slimme lader die de Mac/Safari bug omzeilt ---
 @st.cache_data
 def load_category_database():
+    file_name = "categories_embeddings.pkl.gz"
     try:
-        # Pandas herkent de .gz compressie automatisch
-        return pd.read_pickle("categories_embeddings.pkl.gz")
+        # Poging 1: Lees het in als normaal GZIP bestand
+        return pd.read_pickle(file_name)
+    except OSError:
+        # Poging 2: Als de browser het bestand stiekem al heeft uitgepakt tijdens downloaden
+        try:
+            return pd.read_pickle(file_name, compression=None)
+        except Exception as e:
+            st.error(f"Fout bij laden (onverpakt): {e}")
+            return None
     except Exception as e:
-        st.error(f"Kon de categorie-database 'categories_embeddings.pkl.gz' niet vinden of laden. Zorg dat deze in de root van je GitHub staat. Fout: {e}")
+        st.error(f"Algemene fout bij laden: {e}")
         return None
 
 def extract_domain(val):
