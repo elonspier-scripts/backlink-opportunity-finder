@@ -263,7 +263,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                             analysis = process_site(website, openai_c, PARTNER_TERMS)
                             
                             opportunities.append({
-                                "Bedrijf": title,
+                                "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
                                 "Wat Verkoopt": analysis['wat_verkoopt'] if analysis else "Kan website niet scannen",
                                 "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
                                 "Domain": dom,
