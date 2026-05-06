@@ -44,7 +44,13 @@ if use_maps:
     location_query = st.sidebar.text_input("Locatie", value="Amsterdam, Nederland", help="De stad of regio waar je wilt zoeken.")
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
     expand_categories = st.sidebar.checkbox("AI Categorieën Uitbreiding", value=True, help="Laat AI synoniemen verzamelen voor Maps categorieën.")
-else:
+
+# --- SEARCH TOGGLE ---
+st.sidebar.divider()
+st.sidebar.header("📡 Google Search Scraper")
+use_serp = st.sidebar.toggle("Activeer Google Search Scraper", value=True, help="Zoek breed in de Google zoekresultaten naar partnerpagina's.")
+
+if use_serp:
     pages = st.sidebar.slider("Aantal pagina's diep (Google Search)", 1, 3, 2)
 
 # --- PARTNER TERMEN ---
@@ -97,10 +103,8 @@ with col2:
 def load_category_database():
     file_name = "categories_embeddings.pkl.gz"
     try:
-        # Poging 1: Lees het in als normaal GZIP bestand
         return pd.read_pickle(file_name)
     except OSError:
-        # Poging 2: Als de browser het bestand stiekem al heeft uitgepakt tijdens downloaden
         try:
             return pd.read_pickle(file_name, compression=None)
         except Exception as e:
@@ -142,25 +146,26 @@ def ai_analyze(text, url, ai_client):
     except Exception as e:
         return f"AI Analyse mislukt: {str(e)}"
 
-def process_site(home_url, ai_client, search_terms, target_keyword):
+# AANGEPAST: Inclusief 'force_summary' voor Maps
+def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False):
     result_data = {"url": None, "ai": None, "emails": "", "Omschrijving": "Geen beschrijving"}
     try:
         res = requests.get(home_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        try:
-            home_text = soup.get_text(separator=' ', strip=True)[:1500]
-            prompt = f"De zoekterm van de gebruiker was: '{target_keyword}', maar benoem het niet specifiek in je output. Geef in maximaal 2 korte telegram achtige zinnen aan wat dit bedrijf daadwerkelijk doet of verkoopt, en relevantie. Baseer het op deze website tekst: {home_text}"
-            
-            ai_summary = ai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
-            result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
-        except:
-            pass 
-        
+        # --- STAP 1: Forceren we de omschrijving? (Google Maps modus) ---
+        if force_summary:
+            try:
+                home_text = soup.get_text(separator=' ', strip=True)[:1500]
+                prompt = f"De zoekterm van de gebruiker was: '{target_keyword}', maar benoem het niet specifiek in je output. Geef in maximaal 2 korte telegram achtige zinnen aan wat dit bedrijf daadwerkelijk doet of verkoopt, en relevantie. Baseer het op deze website tekst: {home_text}"
+                ai_summary = ai_client.chat.completions.create(
+                    model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.3
+                )
+                result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
+            except:
+                pass 
+
+        # --- STAP 2: Zoek naar partnerpagina (Gratis HTML check) ---
         partner_url = None
         for link in soup.find_all('a', href=True):
             link_text = link.get_text().lower()
@@ -168,9 +173,23 @@ def process_site(home_url, ai_client, search_terms, target_keyword):
                 partner_url = urljoin(home_url, link['href'])
                 break
         
+        # Geen partnerpagina gevonden? Dan stoppen we hier! (Als force_summary aanstond heb je nu wel al de omschrijving)
         if not partner_url: 
             return result_data
 
+        # --- STAP 3: Partnerpagina gevonden! AI Samenvatting ophalen als we dat in stap 1 nog niet hadden gedaan (SERP modus) ---
+        if not force_summary:
+            try:
+                home_text = soup.get_text(separator=' ', strip=True)[:1500]
+                prompt = f"De zoekterm van de gebruiker was: '{target_keyword}', maar benoem het niet specifiek in je output. Geef in maximaal 2 korte telegram achtige zinnen aan wat dit bedrijf daadwerkelijk doet of verkoopt, en relevantie. Baseer het op deze website tekst: {home_text}"
+                ai_summary = ai_client.chat.completions.create(
+                    model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.3
+                )
+                result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
+            except:
+                pass 
+
+        # --- STAP 4: Partnerpagina uitlezen en analyseren met AI ---
         res_p = requests.get(partner_url, timeout=10)
         p_soup = BeautifulSoup(res_p.text, 'html.parser')
         p_text = p_soup.get_text()
@@ -217,8 +236,10 @@ def get_maps_categories(keyword, ai_client):
 if st.button("🚀 Start Analyse", type="primary"):
     if not api_token or not oa_token or not keywords_area:
         st.error("Vul alle API keys in en voer keywords in.")
-    elif not use_maps and not PARTNER_TERMS:
-        st.error("Selecteer ten minste één taal of voer een eigen term in voor SEO Search.")
+    elif not use_maps and not use_serp:
+        st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
+    elif use_serp and not PARTNER_TERMS:
+        st.error("Selecteer ten minste één taal of voer een eigen term in voor de Search Scraper.")
     else:
         existing = set()
 
@@ -237,7 +258,9 @@ if st.button("🚀 Start Analyse", type="primary"):
         apify = ApifyClient(api_token)
         openai_c = OpenAI(api_key=oa_token)
         keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
-        opportunities = []
+        
+        maps_opportunities = []
+        search_opportunities = []
 
         with st.status("Bezig met scrapen en analyseren...", expanded=True) as status:
             
@@ -245,21 +268,20 @@ if st.button("🚀 Start Analyse", type="primary"):
             # ROUTE A: GOOGLE MAPS LOKALE LEADS
             # ---------------------------------------------------------
             if use_maps:
-                st.write("📍 Google Maps modus geactiveerd.")
+                st.write("📍 Google Maps Scraper is gestart...")
                 lang_code = target_domain.split('.')[-1]
                 if lang_code == "com": lang_code = "en"
                 
                 all_categories = []
                 if expand_categories:
-                    st.write("🧠 AI is tientallen Maps-categorieën aan het verzamelen...")
+                    st.write("🧠 AI is Maps-categorieën aan het verzamelen...")
                     for kw in keywords:
                         cats = get_maps_categories(kw, openai_c)
                         all_categories.extend(cats)
                     all_categories = list(set(all_categories))
-                    
                     st.write(f"🔍 {len(all_categories)} categorie-filters toegepast.")
 
-                st.write(f"🗺️ Zoeken in {location_query}...")
+                st.write(f"🗺️ Maps zoeken in {location_query}...")
                 try:
                     run_input = {
                         "searchStringsArray": keywords,
@@ -272,43 +294,43 @@ if st.button("🚀 Start Analyse", type="primary"):
                         run_input["categories"] = all_categories
 
                     run = apify.actor("nwua9Gu5YrADL7ZDj").call(run_input=run_input)
+                    
+                    st.write("🔎 Maps Resultaten verwerken...")
+                    for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
+                        website = item.get('website')
+                        title = item.get('title')
+                        
+                        if website:
+                            dom = extract_domain(website)
+                            if dom not in existing and dom not in SOCIAL_DOMAINS:
+                                st.write(f"Maps Bedrijf gevonden: **{title}**. Partner-check...")
+                                
+                                maps_emails = item.get('emails', [])
+                                maps_phone = item.get('phoneUnformatted', item.get('phone', 'Geen'))
+                                maps_kw = item.get('categoryName', keywords[0] if keywords else 'Onbekend')
+                                
+                                # Let op: force_summary=True zodat AI ALTIJD de omschrijving pakt
+                                analysis = process_site(website, openai_c, PARTNER_TERMS, maps_kw, force_summary=True)
+                                
+                                maps_opportunities.append({
+                                    "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
+                                    "Omschrijving": analysis['Omschrijving'] if analysis else "Geen beschrijving",
+                                    "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
+                                    "Domain": dom,
+                                    "Telefoon": maps_phone,
+                                    "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
+                                    "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
+                                    "Score Linkbuilding": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
+                                })
+                                existing.add(dom)
                 except Exception as e:
                     st.error(f"Apify Maps call mislukt: {e}")
-                    st.stop()
-
-                st.write("🔎 Resultaten verwerken...")
-                for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
-                    website = item.get('website')
-                    title = item.get('title')
-                    
-                    if website:
-                        dom = extract_domain(website)
-                        if dom not in existing and dom not in SOCIAL_DOMAINS:
-                            st.write(f"Bedrijf gevonden: **{title}**. Partner-check...")
-                            
-                            maps_emails = item.get('emails', [])
-                            maps_phone = item.get('phoneUnformatted', item.get('phone', 'Geen'))
-                            
-                            maps_kw = item.get('categoryName', keywords[0] if keywords else 'Onbekend')
-                            analysis = process_site(website, openai_c, PARTNER_TERMS, maps_kw)
-                            
-                            opportunities.append({
-                                "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                "Omschrijving": analysis['Omschrijving'] if analysis else "Kan website niet scannen",
-                                "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
-                                "Domain": dom,
-                                "Telefoon": maps_phone,
-                                "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
-                                "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
-                                "Score Linkbuilding": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
-                            })
-                            existing.add(dom)
 
             # ---------------------------------------------------------
             # ROUTE B: GOOGLE SEARCH SEO BACKLINKS
             # ---------------------------------------------------------
-            else:
-                st.write("📡 Google Search Scraper aanroepen...")
+            if use_serp:
+                st.write("📡 Google Search Scraper is gestart...")
                 try:
                     run = apify.actor("apify/google-search-scraper").call(run_input={
                         "queries": "\n".join(keywords),
@@ -316,49 +338,86 @@ if st.button("🚀 Start Analyse", type="primary"):
                         "resultsPerPage": 10,
                         "domain": target_domain
                     })
-                except Exception as e:
-                    st.error(f"Apify call mislukt: {e}")
-                    st.stop()
-
-                st.write("🔎 Domeinen filteren en scannen op partnerpagina's...")
-                for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
-                    kw = item.get('searchQuery', {}).get('term') or "Onbekend"
-                    for result in item.get('organicResults', []):
-                        url = result.get('url')
-                        dom = extract_domain(url)
-                        title = result.get('title', dom)
-                        
-                        if dom not in existing and dom not in SOCIAL_DOMAINS:
-                            st.write(f"Nieuw domein gevonden via '{kw}': **{dom}**. Partner-check...")
+                    
+                    st.write("🔎 Search Domeinen filteren en scannen op partnerpagina's...")
+                    for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
+                        kw = item.get('searchQuery', {}).get('term') or "Onbekend"
+                        for result in item.get('organicResults', []):
+                            url = result.get('url')
+                            dom = extract_domain(url)
+                            title = result.get('title', dom)
                             
-                            analysis = process_site(url, openai_c, PARTNER_TERMS, kw)
-                            
-                            if analysis and analysis['url']:
-                                opportunities.append({
-                                    "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                    "Omschrijving": analysis['Omschrijving'],
-                                    "Keyword/Categorie": kw,
-                                    "Domain": dom,
-                                    "Telefoon": "N/A",
-                                    "Emails": analysis['emails'],
-                                    "Partner URL": analysis['url'],
-                                    "Score Linkbuilding": analysis['ai']
-                                })
+                            if dom not in existing and dom not in SOCIAL_DOMAINS:
+                                st.write(f"Nieuw Search domein via '{kw}': **{dom}**. Partner-check...")
+                                
+                                # Let op: force_summary=False (standaard) zodat AI de Lazy methode gebruikt
+                                analysis = process_site(url, openai_c, PARTNER_TERMS, kw, force_summary=False)
+                                
+                                # Bij Search slaan we ze ALLEEN op als er een partnerpagina is gevonden
+                                if analysis and analysis['url']:
+                                    search_opportunities.append({
+                                        "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
+                                        "Omschrijving": analysis['Omschrijving'],
+                                        "Keyword/Categorie": kw,
+                                        "Domain": dom,
+                                        "Telefoon": "N/A",
+                                        "Emails": analysis['emails'],
+                                        "Partner URL": analysis['url'],
+                                        "Score Linkbuilding": analysis['ai']
+                                    })
                                 existing.add(dom) 
-                            else:
-                                existing.add(dom)
+                except Exception as e:
+                    st.error(f"Apify Search call mislukt: {e}")
 
             status.update(label="Analyse voltooid!", state="complete")
 
         # ========================================================
         # 5. RESULTATEN WEERGAVE
         # ========================================================
-        if opportunities:
-            df_final = pd.DataFrame(opportunities)
-            df_final = df_final[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+        # Als ze ALLEBEI aan staan, gebruiken we tabbladen (Dit is visueel veel beter dan kolommen omdat de tabellen breed zijn)
+        if use_maps and use_serp:
+            tab1, tab2 = st.tabs(["📍 Google Maps Resultaten", "📡 Google Search Resultaten"])
             
-            st.success(f"{len(df_final)} Kansen gevonden!")
-            st.dataframe(df_final, use_container_width=True)
-            st.download_button("Download Resultaten (CSV)", df_final.to_csv(index=False), "lead_kansen.csv", "text/csv")
-        else:
-            st.warning("Geen nieuwe kansen of partnerpagina's gevonden.")
+            with tab1:
+                if maps_opportunities:
+                    df_maps = pd.DataFrame(maps_opportunities)
+                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                    st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
+                    st.dataframe(df_maps, use_container_width=True)
+                    st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
+                else:
+                    st.warning("Geen Maps leads gevonden.")
+                    
+            with tab2:
+                if search_opportunities:
+                    df_search = pd.DataFrame(search_opportunities)
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                    st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
+                    st.dataframe(df_search, use_container_width=True)
+                    st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
+                else:
+                    st.warning("Geen partnerpagina's gevonden via Google Search.")
+        
+        # Als ALLEEN Maps aan staat
+        elif use_maps and not use_serp:
+            st.subheader("📍 Google Maps Resultaten")
+            if maps_opportunities:
+                df_maps = pd.DataFrame(maps_opportunities)
+                df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
+                st.dataframe(df_maps, use_container_width=True)
+                st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
+            else:
+                st.warning("Geen Maps leads gevonden.")
+        
+        # Als ALLEEN Search aan staat
+        elif use_serp and not use_maps:
+            st.subheader("📡 Google Search Resultaten")
+            if search_opportunities:
+                df_search = pd.DataFrame(search_opportunities)
+                df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
+                st.dataframe(df_search, use_container_width=True)
+                st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
+            else:
+                st.warning("Geen partnerpagina's gevonden via Google Search.")
