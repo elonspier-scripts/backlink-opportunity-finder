@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import requests
 import re
+import numpy as np
 from bs4 import BeautifulSoup
 from apify_client import ApifyClient
 from urllib.parse import urlparse, urljoin
@@ -92,6 +93,16 @@ with col2:
 # ========================================================
 # 3. LOGICA FUNCTIES
 # ========================================================
+
+@st.cache_data
+def load_category_database():
+    try:
+        # Pandas herkent de .gz compressie automatisch
+        return pd.read_pickle("categories_embeddings.pkl.gz")
+    except Exception as e:
+        st.error(f"Kon de categorie-database 'categories_embeddings.pkl.gz' niet vinden of laden. Zorg dat deze in de root van je GitHub staat. Fout: {e}")
+        return None
+
 def extract_domain(val):
     val = str(val).lower().strip()
     if '://' in val: 
@@ -166,23 +177,36 @@ def process_site(home_url, ai_client, search_terms):
     except:
         return result_data
 
+# --- GEÜPDATE: Gebruikt nu embeddings voor officiële categorieën ---
 def get_maps_categories(keyword, ai_client):
-    try:
-        prompt = f"""
-        Je bent een Google Maps API expert. De gebruiker wil zoeken naar lokale bedrijven met het keyword: '{keyword}'.
-        Geef een lijst van 10 tot 20 gerelateerde, officiële Google Maps bedrijfscategorieën synoniemen (om false negatives te voorkomen).
-        Output ALLEEN de termen, gescheiden door een komma, zonder extra tekst.
-        """
-        response = ai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        categories = [t.strip() for t in response.choices[0].message.content.split(',') if t.strip()]
-        return categories
-    except:
-        return []
+    df_cats = load_category_database()
+    
+    # Als de database niet geladen kan worden, val terug op het simpele keyword
+    if df_cats is None:
+        return [keyword]
 
+    try:
+        # 1. Maak een embedding van het ingetypte keyword (512 dimensies zoals in je Colab script)
+        response = ai_client.embeddings.create(
+            input=[keyword],
+            model="text-embedding-3-small",
+            dimensions=512
+        )
+        query_vector = np.array(response.data[0].embedding, dtype=np.float32)
+
+        # 2. Bereken gelijkenis via matrix-vermenigvuldiging (Dot Product)
+        all_vectors = np.vstack(df_cats['Embedding_Vector'].values)
+        scores = np.dot(all_vectors, query_vector)
+
+        # 3. Pak de top 20 meest relevante officiële categorieën
+        top_indices = np.argsort(scores)[-20:][::-1]
+        relevant_categories = df_cats.iloc[top_indices]['Categorie_Naam'].tolist()
+
+        return relevant_categories
+    except Exception as e:
+        st.error(f"Fout bij semantisch zoeken naar categorieën: {e}")
+        return [keyword]
+    
 # ========================================================
 # 4. RUNNER
 # ========================================================

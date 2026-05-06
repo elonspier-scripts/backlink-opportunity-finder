@@ -1,5 +1,6 @@
 streamlit
 apify-client
+numpy
 pandas
 requests
 beautifulsoup4
