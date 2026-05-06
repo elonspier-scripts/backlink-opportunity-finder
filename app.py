@@ -123,17 +123,18 @@ def ai_analyze(text, url, ai_client):
     try:
         clean_text = text[:2000]
         prompt = f"""
-        Je bent een SEO-expert. Analyseer de tekst van deze 'Partner/Adverteer' pagina: {url}
+        Je bent een Linkbuilding-expert. Analyseer de tekst van deze 'Partner/Adverteer' pagina: {url}
         Tekst: {clean_text} 
 
         Beantwoord de volgende punten:
         1. Is dit een relevante plek voor linkbuilding?
         2. Worden er specifieke eisen gesteld of tarieven genoemd? 
         3. Geef korte samenvatting van de pagina.
-        4. Geef een score (0-10) voor de kans op succesvolle outreach.
+        4. Geef een score (0-10) op basis van potentie voor linkbuidling?
+        5. Welk type partnerpagina is dit (bijv. Gastblog, Adverteren, Affiliate)?
 
         Output formaat:
-        SCORE: [X/10] | TYPE: [bijv. Gastblog/Betaald] | ANALYSE: [Korte uitleg, max. 3 korte zinnen in bulletpoints.]
+        SCORE: [X/10] | TYPE: [bijv. een van de mogelijkheden uit punt 5] | ANALYSE: [Korte uitleg, max. 3 korte en compacte zinnen in bulletpoints.]
         """
         response = ai_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -298,13 +299,13 @@ if st.button("🚀 Start Analyse", type="primary"):
                             
                             opportunities.append({
                                 "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                "Wat Verkoopt": analysis['wat_verkoopt'] if analysis else "Kan website niet scannen",
+                                "Omschrijving": analysis['Omschrijving'] if analysis else "Kan website niet scannen",
                                 "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
                                 "Domain": dom,
                                 "Telefoon": maps_phone,
                                 "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
                                 "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
-                                "AI Potentie": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
+                                "Score Linkbuilding": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
                             })
                             existing.add(dom)
 
@@ -338,13 +339,13 @@ if st.button("🚀 Start Analyse", type="primary"):
                             if analysis and analysis['url']:
                                 opportunities.append({
                                     "Bedrijf": "N/A (SEO Resultaat)",
-                                    "Wat Verkoopt": analysis['wat_verkoopt'],
+                                    "Omschrijving": analysis['Omschrijving'],
                                     "Keyword/Categorie": kw,
                                     "Domain": dom,
                                     "Telefoon": "N/A",
                                     "Emails": analysis['emails'],
                                     "Partner URL": analysis['url'],
-                                    "AI Potentie": analysis['ai']
+                                    "Score Linkbuilding": analysis['ai']
                                 })
                                 existing.add(dom) 
                             else:
@@ -357,7 +358,7 @@ if st.button("🚀 Start Analyse", type="primary"):
         # ========================================================
         if opportunities:
             df_final = pd.DataFrame(opportunities)
-            df_final = df_final[["Bedrijf", "Wat Verkoopt", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "AI Potentie"]]
+            df_final = df_final[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
             
             st.success(f"{len(df_final)} Kansen gevonden!")
             st.dataframe(df_final, use_container_width=True)
