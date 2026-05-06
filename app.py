@@ -93,9 +93,6 @@ with col2:
 # ========================================================
 # 3. LOGICA FUNCTIES
 # ========================================================
-
-
-# --- GEÜPDATE: Slimme lader die de Mac/Safari bug omzeilt ---
 @st.cache_data
 def load_category_database():
     file_name = "categories_embeddings.pkl.gz"
@@ -145,21 +142,22 @@ def ai_analyze(text, url, ai_client):
     except Exception as e:
         return f"AI Analyse mislukt: {str(e)}"
 
-def process_site(home_url, ai_client, search_terms):
-    result_data = {"url": None, "ai": None, "emails": "", "wat_verkoopt": "Geen beschrijving"}
+def process_site(home_url, ai_client, search_terms, target_keyword):
+    result_data = {"url": None, "ai": None, "emails": "", "Omschrijving": "Geen beschrijving"}
     try:
         res = requests.get(home_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
         try:
             home_text = soup.get_text(separator=' ', strip=True)[:1500]
-            prompt = f"Geef in exact 1 korte zin aan wat dit bedrijf doet of verkoopt. Baseer je op deze website tekst: {home_text}"
+            prompt = f"De zoekterm van de gebruiker was: '{target_keyword}'. Geef in maximaal 2 korte zin aan wat dit bedrijf daadwerkelijk doet of verkoopt, en vermeld of ze relevant zijn voor de genoemde zoekterm. Baseer je op deze website tekst: {home_text}"
+            
             ai_summary = ai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3
             )
-            result_data["wat_verkoopt"] = ai_summary.choices[0].message.content.strip()
+            result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
         except:
             pass 
         
@@ -188,16 +186,13 @@ def process_site(home_url, ai_client, search_terms):
     except:
         return result_data
 
-# --- GEÜPDATE: Gebruikt nu embeddings voor officiële categorieën ---
 def get_maps_categories(keyword, ai_client):
     df_cats = load_category_database()
     
-    # Als de database niet geladen kan worden, val terug op het simpele keyword
     if df_cats is None:
         return [keyword]
 
     try:
-        # 1. Maak een embedding van het ingetypte keyword (512 dimensies zoals in je Colab script)
         response = ai_client.embeddings.create(
             input=[keyword],
             model="text-embedding-3-small",
@@ -205,11 +200,9 @@ def get_maps_categories(keyword, ai_client):
         )
         query_vector = np.array(response.data[0].embedding, dtype=np.float32)
 
-        # 2. Bereken gelijkenis via matrix-vermenigvuldiging (Dot Product)
         all_vectors = np.vstack(df_cats['Embedding_Vector'].values)
         scores = np.dot(all_vectors, query_vector)
 
-        # 3. Pak de top 20 meest relevante officiële categorieën
         top_indices = np.argsort(scores)[-20:][::-1]
         relevant_categories = df_cats.iloc[top_indices]['Categorie_Naam'].tolist()
 
@@ -217,7 +210,7 @@ def get_maps_categories(keyword, ai_client):
     except Exception as e:
         st.error(f"Fout bij semantisch zoeken naar categorieën: {e}")
         return [keyword]
-    
+
 # ========================================================
 # 4. RUNNER
 # ========================================================
@@ -263,6 +256,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                         cats = get_maps_categories(kw, openai_c)
                         all_categories.extend(cats)
                     all_categories = list(set(all_categories))
+                    
                     st.write(f"🔍 {len(all_categories)} categorie-filters toegepast.")
 
                 st.write(f"🗺️ Zoeken in {location_query}...")
@@ -295,7 +289,8 @@ if st.button("🚀 Start Analyse", type="primary"):
                             maps_emails = item.get('emails', [])
                             maps_phone = item.get('phoneUnformatted', item.get('phone', 'Geen'))
                             
-                            analysis = process_site(website, openai_c, PARTNER_TERMS)
+                            maps_kw = item.get('categoryName', keywords[0] if keywords else 'Onbekend')
+                            analysis = process_site(website, openai_c, PARTNER_TERMS, maps_kw)
                             
                             opportunities.append({
                                 "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
@@ -331,14 +326,16 @@ if st.button("🚀 Start Analyse", type="primary"):
                     for result in item.get('organicResults', []):
                         url = result.get('url')
                         dom = extract_domain(url)
+                        title = result.get('title', dom)
                         
                         if dom not in existing and dom not in SOCIAL_DOMAINS:
                             st.write(f"Nieuw domein gevonden via '{kw}': **{dom}**. Partner-check...")
-                            analysis = process_site(url, openai_c, PARTNER_TERMS)
+                            
+                            analysis = process_site(url, openai_c, PARTNER_TERMS, kw)
                             
                             if analysis and analysis['url']:
                                 opportunities.append({
-                                    "Bedrijf": "N/A (SEO Resultaat)",
+                                    "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
                                     "Omschrijving": analysis['Omschrijving'],
                                     "Keyword/Categorie": kw,
                                     "Domain": dom,
