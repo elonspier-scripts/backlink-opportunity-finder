@@ -142,25 +142,25 @@ def ai_analyze(text, url, ai_client):
     except Exception as e:
         return f"AI Analyse mislukt: {str(e)}"
 
-def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False):
+def process_site(home_url, ai_client, search_terms, target_keyword):
     result_data = {"url": None, "ai": None, "emails": "", "Omschrijving": "Geen beschrijving"}
     try:
         res = requests.get(home_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # --- STAP 1: Homepage Samenvatting (Alleen als force_summary True is, bijv. Maps) ---
-        if force_summary:
-            try:
-                home_text = soup.get_text(separator=' ', strip=True)[:1500]
-                prompt = f"De zoekterm van de gebruiker was: '{target_keyword}'. Geef in exact 1 korte zin aan wat dit bedrijf daadwerkelijk doet of verkoopt, en vermeld of ze relevant zijn voor de genoemde zoekterm. Baseer je op deze website tekst: {home_text}"
-                ai_summary = ai_client.chat.completions.create(
-                    model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.3
-                )
-                result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
-            except:
-                pass
-
-        # --- STAP 2: Zoek naar partnerpagina ---
+        try:
+            home_text = soup.get_text(separator=' ', strip=True)[:1500]
+            prompt = f"De zoekterm van de gebruiker was: '{target_keyword}', maar benoem het niet specifiek in je output. Geef in maximaal 2 korte telegram achtige zinnen aan wat dit bedrijf daadwerkelijk doet of verkoopt, en relevantie. Baseer het op deze website tekst: {home_text}"
+            
+            ai_summary = ai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
+        except:
+            pass 
+        
         partner_url = None
         for link in soup.find_all('a', href=True):
             link_text = link.get_text().lower()
@@ -168,26 +168,13 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
                 partner_url = urljoin(home_url, link['href'])
                 break
         
-        # Stop hier als er geen partnerpagina is (behalve als we al klaar waren bij Maps)
         if not partner_url: 
             return result_data
 
-        # --- STAP 3: Homepage Samenvatting alsnog doen (Alleen voor SEO Search route die een treffer heeft) ---
-        if not force_summary:
-            try:
-                home_text = soup.get_text(separator=' ', strip=True)[:1500]
-                prompt = f"De zoekterm van de gebruiker was: '{target_keyword}'. Geef in exact 1 korte zin aan wat dit bedrijf daadwerkelijk doet of verkoopt, en vermeld of ze relevant zijn voor de genoemde zoekterm. Baseer je op deze website tekst: {home_text}"
-                ai_summary = ai_client.chat.completions.create(
-                    model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.3
-                )
-                result_data["Omschrijving"] = ai_summary.choices[0].message.content.strip()
-            except:
-                pass
-
-        # --- STAP 4: Analyseer de gevonden partnerpagina ---
         res_p = requests.get(partner_url, timeout=10)
         p_soup = BeautifulSoup(res_p.text, 'html.parser')
         p_text = p_soup.get_text()
+        
         emails = list(set(re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", p_text, re.I)))
         ai_res = ai_analyze(p_text, partner_url, ai_client)
 
