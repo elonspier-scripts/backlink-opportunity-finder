@@ -150,7 +150,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword):
         
         try:
             home_text = soup.get_text(separator=' ', strip=True)[:1500]
-            prompt = f"De zoekterm van de gebruiker was: '{target_keyword}'. Geef in maximaal 2 korte zin aan wat dit bedrijf daadwerkelijk doet of verkoopt, en vermeld of ze relevant zijn voor de genoemde zoekterm. Baseer je op deze website tekst: {home_text}"
+            prompt = f"De zoekterm van de gebruiker was: '{target_keyword}'. Geef in maximaal 2 korte zin aan wat dit bedrijf daadwerkelijk doet of verkoopt, en vermeld waarom dit relevant is. Benoem de '{target_keyword}' niet in je output. Baseer het op deze website tekst: {home_text}"
             
             ai_summary = ai_client.chat.completions.create(
                 model="gpt-4o-mini",
