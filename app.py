@@ -6,7 +6,7 @@ import re
 import numpy as np
 from bs4 import BeautifulSoup
 from apify_client import ApifyClient
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, unquote
 from openai import OpenAI
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -24,6 +24,7 @@ SOCIAL_DOMAINS = {
 }
 
 REQUEST_HEADERS = {'User-Agent': 'Mozilla/5.0'}
+EMAIL_REGEX = re.compile(r"[a-z0-9.\-+_]+@[a-z0-9.\-+_]+\.[a-z]{2,}", re.I)
 
 def create_retry_session():
     session = requests.Session()
@@ -217,6 +218,58 @@ def find_partner_url(soup, home_url, search_terms):
 
     return None
 
+def deobfuscate_email_text(text):
+    if not text:
+        return ""
+
+    normalized = text.lower()
+    normalized = re.sub(r"\s*(\[|\()\s*at\s*(\]|\))\s*", "@", normalized)
+    normalized = re.sub(r"\s*(\[|\()\s*dot\s*(\]|\))\s*", ".", normalized)
+    normalized = re.sub(r"\s+at\s+", "@", normalized)
+    normalized = re.sub(r"\s+dot\s+", ".", normalized)
+    normalized = normalized.replace("{at}", "@").replace("{dot}", ".")
+    return normalized
+
+def extract_emails_from_soup(soup):
+    emails = set()
+
+    page_text = soup.get_text(separator=' ', strip=True)
+    emails.update(EMAIL_REGEX.findall(page_text))
+    emails.update(EMAIL_REGEX.findall(deobfuscate_email_text(page_text)))
+
+    for link in soup.find_all('a', href=True):
+        href = (link.get('href') or '').strip()
+        if href.lower().startswith('mailto:'):
+            mailto_value = unquote(href[7:]).split('?', 1)[0]
+            if mailto_value:
+                emails.update(EMAIL_REGEX.findall(mailto_value))
+
+        link_text = " ".join([
+            link.get_text(separator=' ', strip=True),
+            link.get('aria-label', ''),
+            link.get('title', '')
+        ])
+        emails.update(EMAIL_REGEX.findall(deobfuscate_email_text(link_text)))
+
+    for footer in soup.select('footer, [id*="footer" i], [class*="footer" i]'):
+        footer_text = footer.get_text(separator=' ', strip=True)
+        emails.update(EMAIL_REGEX.findall(footer_text))
+        emails.update(EMAIL_REGEX.findall(deobfuscate_email_text(footer_text)))
+        for footer_link in footer.find_all('a', href=True):
+            footer_href = (footer_link.get('href') or '').strip()
+            if footer_href.lower().startswith('mailto:'):
+                footer_mailto = unquote(footer_href[7:]).split('?', 1)[0]
+                if footer_mailto:
+                    emails.update(EMAIL_REGEX.findall(footer_mailto))
+
+    cleaned = []
+    for email in emails:
+        normalized_email = email.strip().strip('.,;:()[]{}<>")(')
+        if normalized_email:
+            cleaned.append(normalized_email.lower())
+
+    return sorted(set(cleaned))
+
 # AANGEPAST: Inclusief 'force_summary' voor Maps
 def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False):
     result_data = {"url": None, "ai": None, "emails": "", "Omschrijving": "Geen beschrijving"}
@@ -261,8 +314,9 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
         res_p.raise_for_status()
         p_soup = BeautifulSoup(res_p.text, 'html.parser')
         p_text = p_soup.get_text()
-        
-        emails = list(set(re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", p_text, re.I)))
+        emails = extract_emails_from_soup(p_soup)
+        if not emails:
+            emails = extract_emails_from_soup(soup)
         ai_res = ai_analyze(p_text, partner_url, ai_client)
 
         result_data["url"] = partner_url
