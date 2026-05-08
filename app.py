@@ -8,6 +8,8 @@ from bs4 import BeautifulSoup
 from apify_client import ApifyClient
 from urllib.parse import urlparse, urljoin
 from openai import OpenAI
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ========================================================
 # 0. PAGINA INSTELLINGEN & CONSTANTEN
@@ -20,6 +22,27 @@ SOCIAL_DOMAINS = {
     "vimeo.com", "reddit.com", "wikipedia.org", "google.com",
     "apple.com", "microsoft.com", "bol.com", "nu.nl"
 }
+
+REQUEST_HEADERS = {'User-Agent': 'Mozilla/5.0'}
+
+def create_retry_session():
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        connect=2,
+        read=2,
+        status=2,
+        backoff_factor=0.8,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+HTTP_SESSION = create_retry_session()
 
 st.title("🚀 AI Backlink & Lead Opportunity Finder")
 st.markdown("Vind exclusieve partnerpagina's via Google Search of schraap lokale leads via Google Maps.")
@@ -146,11 +169,60 @@ def ai_analyze(text, url, ai_client):
     except Exception as e:
         return f"AI Analyse mislukt: {str(e)}"
 
+def is_partner_link(link, search_terms):
+    href = (link.get('href') or '').strip()
+    if not href or href.startswith(('#', 'mailto:', 'tel:', 'javascript:')):
+        return False
+
+    link_blob = " ".join([
+        link.get_text(separator=' ', strip=True),
+        link.get('aria-label', ''),
+        link.get('title', ''),
+        href
+    ]).lower()
+    return any(term in link_blob for term in search_terms)
+
+def find_partner_url(soup, home_url, search_terms):
+    seen_hrefs = set()
+
+    priority_selectors = [
+        'footer',
+        'nav',
+        '[role="navigation"]',
+        '[id*="footer" i]',
+        '[class*="footer" i]',
+        '[id*="menu" i]',
+        '[class*="menu" i]',
+        '[id*="nav" i]',
+        '[class*="nav" i]'
+    ]
+
+    for selector in priority_selectors:
+        for container in soup.select(selector):
+            for link in container.find_all('a', href=True):
+                href = (link.get('href') or '').strip()
+                if href in seen_hrefs:
+                    continue
+                seen_hrefs.add(href)
+                if is_partner_link(link, search_terms):
+                    return urljoin(home_url, href)
+
+    for link in soup.find_all('a', href=True):
+        href = (link.get('href') or '').strip()
+        if href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
+        if is_partner_link(link, search_terms):
+            return urljoin(home_url, href)
+
+    return None
+
 # AANGEPAST: Inclusief 'force_summary' voor Maps
 def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False):
     result_data = {"url": None, "ai": None, "emails": "", "Omschrijving": "Geen beschrijving"}
     try:
-        res = requests.get(home_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        res = HTTP_SESSION.get(home_url, timeout=10, headers=REQUEST_HEADERS)
+        res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
         
         # --- STAP 1: Forceren we de omschrijving? (Google Maps modus) ---
@@ -166,12 +238,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
                 pass 
 
         # --- STAP 2: Zoek naar partnerpagina (Gratis HTML check) ---
-        partner_url = None
-        for link in soup.find_all('a', href=True):
-            link_text = link.get_text().lower()
-            if any(t in link_text for t in search_terms):
-                partner_url = urljoin(home_url, link['href'])
-                break
+        partner_url = find_partner_url(soup, home_url, search_terms)
         
         # Geen partnerpagina gevonden? Dan stoppen we hier! (Als force_summary aanstond heb je nu wel al de omschrijving)
         if not partner_url: 
@@ -190,7 +257,8 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
                 pass 
 
         # --- STAP 4: Partnerpagina uitlezen en analyseren met AI ---
-        res_p = requests.get(partner_url, timeout=10)
+        res_p = HTTP_SESSION.get(partner_url, timeout=10, headers=REQUEST_HEADERS)
+        res_p.raise_for_status()
         p_soup = BeautifulSoup(res_p.text, 'html.parser')
         p_text = p_soup.get_text()
         
