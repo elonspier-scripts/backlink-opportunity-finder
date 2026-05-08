@@ -17,4 +17,4 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
-          model: gpt-5.3-codex  # You can change this to gpt-5.3-codex if available
+          model: openai/gpt-5.3-codex  # You can change this to gpt-5.3-codex if available
