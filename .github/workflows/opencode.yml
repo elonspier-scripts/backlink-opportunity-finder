@@ -2,19 +2,24 @@ name: opencode
 on:
   issue_comment:
     types: [created]
-  pull_request_review_comment:
-    types: [created]
+
+# ADD THIS PERMISSIONS BLOCK HERE
+permissions:
+  contents: read
+  id-token: write      # Fixes the OIDC error
+  issues: write        # Allows the bot to reply in chat
+  pull-requests: write # Allows the bot to reply in PRs
 
 jobs:
   opencode:
-    # This ensures it only runs when you call it with /oc
     if: contains(github.event.comment.body, '/oc')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run OpenCode Agent
-        uses: anomalyco/opencode/github@latest
+      - uses: anomalyco/opencode/github@latest
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
-          model: openai/gpt-5.3-codex  # You can change this to gpt-5.3-codex if available
+          model: openai/gpt-5.3-codex  # Use gpt-4o for best results
+
