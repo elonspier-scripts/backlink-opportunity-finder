@@ -4,7 +4,6 @@ import io
 import requests
 import re
 import json
-import html
 import numpy as np
 from bs4 import BeautifulSoup
 from apify_client import ApifyClient
@@ -398,70 +397,6 @@ def find_404_outbound_links(page_soup, page_url, max_checks):
 
     return broken
 
-def normalize_domain_url(value):
-    if value is None:
-        return ""
-    value = str(value).strip()
-    if not value:
-        return ""
-    if value.startswith(("http://", "https://")):
-        return value
-    return f"https://{value}"
-
-def is_http_url(value):
-    if value is None:
-        return False
-    value = str(value).strip().lower()
-    return value.startswith("http://") or value.startswith("https://")
-
-def render_link_html(url, label=None):
-    if not url:
-        return ""
-    safe_url = html.escape(str(url), quote=True)
-    safe_label = html.escape(str(label if label else url))
-    return f'<a href="{safe_url}" target="_blank">{safe_label}</a>'
-
-def render_social_links_html(value):
-    if value is None:
-        return ""
-    links = [link.strip() for link in str(value).split(',') if link.strip()]
-    if not links:
-        return ""
-
-    items = []
-    for link in links:
-        if is_http_url(link):
-            items.append(f"<li>{render_link_html(link, link)}</li>")
-        else:
-            items.append(f"<li>{html.escape(link)}</li>")
-    return f"<ul>{''.join(items)}</ul>"
-
-def render_results_table(df):
-    display_df = df.copy()
-
-    for col in display_df.columns:
-        display_df[col] = display_df[col].apply(lambda value: "" if pd.isna(value) else html.escape(str(value)))
-
-    if "Domain" in df.columns:
-        display_df["Domain"] = df["Domain"].apply(
-            lambda value: render_link_html(normalize_domain_url(value), value)
-        )
-
-    if "Ranked Page" in df.columns:
-        display_df["Ranked Page"] = df["Ranked Page"].apply(
-            lambda value: render_link_html(value, value) if is_http_url(value) else ("" if pd.isna(value) else html.escape(str(value)))
-        )
-
-    if "Partner URL" in df.columns:
-        display_df["Partner URL"] = df["Partner URL"].apply(
-            lambda value: render_link_html(value, value) if is_http_url(value) else ("" if pd.isna(value) else html.escape(str(value)))
-        )
-
-    if "Social Links" in df.columns:
-        display_df["Social Links"] = df["Social Links"].apply(render_social_links_html)
-
-    st.markdown(display_df.to_html(index=False, escape=False), unsafe_allow_html=True)
-
 # AANGEPAST: Inclusief 'force_summary' voor Maps
 def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False, check_404=False, max_link_checks=25):
     result_data = {
@@ -649,7 +584,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     "Omschrijving": analysis['Omschrijving'] if analysis else "Geen beschrijving",
                                     "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
                                     "Domain": dom,
-                                    "Ranked Page": website,
                                     "Telefoon": maps_phone,
                                     "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
                                     "Social Links": ", ".join(analysis['social_links']) if analysis and analysis['social_links'] else "",
@@ -702,7 +636,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                                         "Omschrijving": analysis['Omschrijving'],
                                         "Keyword/Categorie": kw,
                                         "Domain": dom,
-                                        "Ranked Page": url,
                                         "Telefoon": "N/A",
                                         "Emails": analysis['emails'],
                                         "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
@@ -726,9 +659,9 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Ranked Page", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
-                    render_results_table(df_maps)
+                    st.dataframe(df_maps, use_container_width=True)
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
                 else:
                     st.warning("Geen Maps leads gevonden.")
@@ -736,9 +669,9 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab2:
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
-                    df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Ranked Page", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                     st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
-                    render_results_table(df_search)
+                    st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
                 else:
                     st.warning("Geen partnerpagina's gevonden via Google Search.")
@@ -748,9 +681,9 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Ranked Page", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
-                render_results_table(df_maps)
+                st.dataframe(df_maps, use_container_width=True)
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
             else:
                 st.warning("Geen Maps leads gevonden.")
@@ -760,9 +693,9 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📡 Google Search Resultaten")
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
-                df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Ranked Page", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                 st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
-                render_results_table(df_search)
+                st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
             else:
                 st.warning("Geen partnerpagina's gevonden via Google Search.")
