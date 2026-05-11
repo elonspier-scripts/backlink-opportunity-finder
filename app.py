@@ -641,7 +641,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                         "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
                                         "Partner URL": analysis['url'],
                                         "Score Linkbuilding": analysis['ai'],
-                                        "Broken Outbound Links": json.dumps(analysis['brokenLinks']) if analysis['brokenLinks'] else "[]"
+                                        "Broken Outbound Links": json.dumps(analysis['brokenLinks']) if analysis['brokenLinks'] else "no links found"
                                     })
                                 existing.add(dom) 
                 except Exception as e:
