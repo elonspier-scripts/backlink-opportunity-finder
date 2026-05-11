@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import requests
 import re
+import json
 import numpy as np
 from bs4 import BeautifulSoup
 from apify_client import ApifyClient
@@ -25,6 +26,10 @@ SOCIAL_DOMAINS = {
 
 REQUEST_HEADERS = {'User-Agent': 'Mozilla/5.0'}
 EMAIL_REGEX = re.compile(r"[a-z0-9.\-+_]+@[a-z0-9.\-+_]+\.[a-z]{2,}", re.I)
+SOCIAL_DOMAINS_EXTENDED = {
+    "facebook.com", "instagram.com", "linkedin.com", "x.com", "twitter.com",
+    "youtube.com", "tiktok.com", "pinterest.com", "reddit.com", "threads.net"
+}
 
 def create_retry_session():
     session = requests.Session()
@@ -76,6 +81,21 @@ use_serp = st.sidebar.toggle("Activeer Google Search Scraper", value=True, help=
 
 if use_serp:
     pages = st.sidebar.slider("Aantal pagina's diep (Google Search)", 1, 3, 2)
+
+st.sidebar.divider()
+st.sidebar.header("🔗 Outbound Link Checks")
+check_404_outbound = st.sidebar.toggle(
+    "Check 404 outgoing links",
+    value=True,
+    help="Controleer alleen content-links op de gevonden partnerpagina en markeer 404 links."
+)
+max_outbound_checks = st.sidebar.slider(
+    "Max outgoing links checked per page",
+    5,
+    60,
+    25,
+    disabled=not check_404_outbound
+)
 
 # --- PARTNER TERMEN ---
 st.sidebar.divider()
@@ -270,13 +290,128 @@ def extract_emails_from_soup(soup):
 
     return sorted(set(cleaned))
 
+def is_social_link(url):
+    try:
+        domain = extract_domain(url)
+        return any(domain == d or domain.endswith(f".{d}") for d in SOCIAL_DOMAINS_EXTENDED)
+    except Exception:
+        return False
+
+def extract_social_links_from_soup(soup, base_url):
+    social_links = set()
+    for link in soup.find_all('a', href=True):
+        href = (link.get('href') or '').strip()
+        if not href or href.startswith(('#', 'mailto:', 'tel:', 'javascript:')):
+            continue
+
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in ('http', 'https'):
+            continue
+
+        normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
+        if is_social_link(normalized):
+            social_links.add(normalized)
+
+    return sorted(social_links)
+
+def collect_content_outbound_links(soup, page_url):
+    content_selectors = [
+        'main', 'article', '[role="main"]',
+        '.content', '.entry-content', '.post-content', '.article-content', '.post'
+    ]
+    boilerplate_selectors = 'header, nav, footer, aside, [role="navigation"], [class*="footer" i], [id*="footer" i], [class*="menu" i], [id*="menu" i], [class*="sidebar" i], [id*="sidebar" i]'
+
+    containers = []
+    for selector in content_selectors:
+        containers.extend(soup.select(selector))
+
+    if not containers:
+        body = soup.find('body')
+        containers = [body] if body else [soup]
+
+    seen_urls = set()
+    outbound_links = []
+    base_domain = extract_domain(page_url)
+
+    for container in containers:
+        for link in container.find_all('a', href=True):
+            if link.find_parent(['header', 'nav', 'footer', 'aside']):
+                continue
+            if link.find_parent(attrs={'role': re.compile(r'navigation', re.I)}):
+                continue
+            if link.find_parent(class_=re.compile(r'footer|menu|sidebar', re.I)):
+                continue
+            if link.find_parent(id=re.compile(r'footer|menu|sidebar', re.I)):
+                continue
+
+            href = (link.get('href') or '').strip()
+            if not href or href.startswith(('#', 'mailto:', 'tel:', 'javascript:')):
+                continue
+
+            absolute = urljoin(page_url, href)
+            parsed = urlparse(absolute)
+            if parsed.scheme not in ('http', 'https'):
+                continue
+
+            normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            if extract_domain(normalized) == base_domain:
+                continue
+            if is_social_link(normalized):
+                continue
+            if normalized in seen_urls:
+                continue
+
+            seen_urls.add(normalized)
+
+            rel_attr = link.get('rel') or []
+            rel_joined = " ".join([str(r).lower() for r in rel_attr])
+            rel_type = "nofollow" if "nofollow" in rel_joined else "dofollow"
+
+            outbound_links.append({
+                "url": normalized,
+                "anchorText": link.get_text(separator=' ', strip=True),
+                "rel": rel_type
+            })
+
+    return outbound_links
+
+def find_404_outbound_links(page_soup, page_url, max_checks):
+    outbound_links = collect_content_outbound_links(page_soup, page_url)
+    broken = []
+
+    for link_data in outbound_links[:max_checks]:
+        try:
+            response = HTTP_SESSION.get(link_data["url"], timeout=6, headers=REQUEST_HEADERS, allow_redirects=True)
+            status_code = response.status_code
+            if status_code == 404:
+                broken.append({
+                    "#": len(broken) + 1,
+                    "brokenUrl": link_data["url"],
+                    "anchorText": link_data["anchorText"],
+                    "statusCode": status_code,
+                    "rel": link_data["rel"]
+                })
+        except Exception:
+            continue
+
+    return broken
+
 # AANGEPAST: Inclusief 'force_summary' voor Maps
-def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False):
-    result_data = {"url": None, "ai": None, "emails": "", "Omschrijving": "Geen beschrijving"}
+def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False, check_404=False, max_link_checks=25):
+    result_data = {
+        "url": None,
+        "ai": None,
+        "emails": "",
+        "Omschrijving": "Geen beschrijving",
+        "social_links": [],
+        "brokenLinks": []
+    }
     try:
         res = HTTP_SESSION.get(home_url, timeout=10, headers=REQUEST_HEADERS)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
+        result_data["social_links"] = extract_social_links_from_soup(soup, home_url)
         
         # --- STAP 1: Forceren we de omschrijving? (Google Maps modus) ---
         if force_summary:
@@ -318,6 +453,8 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
         if not emails:
             emails = extract_emails_from_soup(soup)
         ai_res = ai_analyze(p_text, partner_url, ai_client)
+        if check_404:
+            result_data["brokenLinks"] = find_404_outbound_links(p_soup, partner_url, max_link_checks)
 
         result_data["url"] = partner_url
         result_data["ai"] = ai_res
@@ -432,7 +569,15 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 maps_kw = item.get('categoryName', keywords[0] if keywords else 'Onbekend')
                                 
                                 # Let op: force_summary=True zodat AI ALTIJD de omschrijving pakt
-                                analysis = process_site(website, openai_c, PARTNER_TERMS, maps_kw, force_summary=True)
+                                analysis = process_site(
+                                    website,
+                                    openai_c,
+                                    PARTNER_TERMS,
+                                    maps_kw,
+                                    force_summary=True,
+                                    check_404=False,
+                                    max_link_checks=max_outbound_checks
+                                )
                                 
                                 maps_opportunities.append({
                                     "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
@@ -441,6 +586,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     "Domain": dom,
                                     "Telefoon": maps_phone,
                                     "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
+                                    "Social Links": ", ".join(analysis['social_links']) if analysis and analysis['social_links'] else "",
                                     "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
                                     "Score Linkbuilding": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
                                 })
@@ -473,7 +619,15 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 st.write(f"Nieuw Search domein via '{kw}': **{dom}**. Partner-check...")
                                 
                                 # Let op: force_summary=False (standaard) zodat AI de Lazy methode gebruikt
-                                analysis = process_site(url, openai_c, PARTNER_TERMS, kw, force_summary=False)
+                                analysis = process_site(
+                                    url,
+                                    openai_c,
+                                    PARTNER_TERMS,
+                                    kw,
+                                    force_summary=False,
+                                    check_404=check_404_outbound,
+                                    max_link_checks=max_outbound_checks
+                                )
                                 
                                 # Bij Search slaan we ze ALLEEN op als er een partnerpagina is gevonden
                                 if analysis and analysis['url']:
@@ -484,8 +638,10 @@ if st.button("🚀 Start Analyse", type="primary"):
                                         "Domain": dom,
                                         "Telefoon": "N/A",
                                         "Emails": analysis['emails'],
+                                        "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
                                         "Partner URL": analysis['url'],
-                                        "Score Linkbuilding": analysis['ai']
+                                        "Score Linkbuilding": analysis['ai'],
+                                        "Broken Outbound Links": json.dumps(analysis['brokenLinks']) if analysis['brokenLinks'] else "[]"
                                     })
                                 existing.add(dom) 
                 except Exception as e:
@@ -503,7 +659,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(df_maps, use_container_width=True)
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
@@ -513,7 +669,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab2:
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
-                    df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                     st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                     st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
@@ -525,7 +681,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(df_maps, use_container_width=True)
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
@@ -537,7 +693,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📡 Google Search Resultaten")
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
-                df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Partner URL", "Score Linkbuilding"]]
+                df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                 st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                 st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
