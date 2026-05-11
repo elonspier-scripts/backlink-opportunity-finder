@@ -582,7 +582,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 maps_opportunities.append({
                                     "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
                                     "Omschrijving": analysis['Omschrijving'] if analysis else "Geen beschrijving",
-                                    "Keyword/Categorie": item.get('categoryName', 'Onbekend'),
+                                    "Category": item.get('categoryName', 'Onbekend'),
                                     "Domain": dom,
                                     "Telefoon": maps_phone,
                                     "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
@@ -634,7 +634,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     search_opportunities.append({
                                         "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
                                         "Omschrijving": analysis['Omschrijving'],
-                                        "Keyword/Categorie": kw,
+                                        "Category": kw,
                                         "Domain": dom,
                                         "Telefoon": "N/A",
                                         "Emails": analysis['emails'],
@@ -659,7 +659,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(df_maps, use_container_width=True)
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
@@ -669,7 +669,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab2:
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
-                    df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                     st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                     st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
@@ -681,7 +681,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                df_maps = df_maps[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(df_maps, use_container_width=True)
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
@@ -693,7 +693,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📡 Google Search Resultaten")
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
-                df_search = df_search[["Bedrijf", "Omschrijving", "Keyword/Categorie", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                 st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                 st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
