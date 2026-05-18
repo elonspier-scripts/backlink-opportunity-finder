@@ -12,6 +12,23 @@ from openai import OpenAI
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+DATAFORSEO_BASE_URL = "https://api.dataforseo.com/v3"
+DATAFORSEO_LANGUAGE_BY_DOMAIN = {
+    "google.nl": "Dutch",
+    "google.be": "Dutch",
+    "google.com": "English",
+    "google.de": "German",
+    "google.fr": "French"
+}
+DATAFORSEO_LOCATION_BY_DOMAIN = {
+    "google.nl": "Netherlands",
+    "google.be": "Belgium",
+    "google.com": "United States",
+    "google.de": "Germany",
+    "google.fr": "France"
+}
+PHONE_REGEX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{0,4}")
+
 # ========================================================
 # 0. PAGINA INSTELLINGEN & CONSTANTEN
 # ========================================================
@@ -57,8 +74,32 @@ st.markdown("Vind exclusieve partnerpagina's via Google Search of schraap lokale
 # 1. INPUT SECTIE (SIDEBAR)
 # ========================================================
 st.sidebar.header("🔑 API Configuratie")
-api_token = st.sidebar.text_input("Apify API Token", type="password", value=st.secrets.get("APIFY", ""))
-oa_token = st.sidebar.text_input("OpenAI API Key", type="password", value=st.secrets.get("OPENAI", ""))
+use_own_keys = st.sidebar.toggle(
+    "Gebruiker voert eigen API keys in",
+    value=True,
+    help="Aanbevolen voor publieke apps: bezoekers gebruiken dan hun eigen credits."
+)
+
+api_token_default = ""
+dfs_login_default = ""
+dfs_password_default = ""
+oa_token_default = ""
+
+if not use_own_keys:
+    owner_access_code = st.sidebar.text_input("Owner toegangscode", type="password")
+    expected_owner_code = st.secrets.get("OWNER_ACCESS_CODE", "")
+    if not expected_owner_code or owner_access_code != expected_owner_code:
+        st.sidebar.error("Owner toegangscode vereist om server-keys te gebruiken.")
+    else:
+        api_token_default = st.secrets.get("APIFY", "")
+        dfs_login_default = st.secrets.get("DATAFORSEO_LOGIN", "")
+        dfs_password_default = st.secrets.get("DATAFORSEO_PASSWORD", "")
+        oa_token_default = st.secrets.get("OPENAI", "")
+
+api_token = st.sidebar.text_input("Apify API Token (Maps)", type="password", value=api_token_default)
+dfs_login = st.sidebar.text_input("DataForSEO Login", value=dfs_login_default)
+dfs_password = st.sidebar.text_input("DataForSEO Password", type="password", value=dfs_password_default)
+oa_token = st.sidebar.text_input("OpenAI API Key", type="password", value=oa_token_default)
 
 st.sidebar.divider()
 st.sidebar.header("⚙️ Algemene Instellingen")
@@ -68,11 +109,16 @@ target_domain = st.sidebar.selectbox("Google Domein", ["google.nl", "google.be",
 st.sidebar.divider()
 st.sidebar.header("📍 Lokale Leads (Google Maps)")
 use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
+location_query = "Amsterdam, Nederland"
+maps_max_results = 10
+expand_categories = True
+maps_contact_enrichment = True
 
 if use_maps:
     location_query = st.sidebar.text_input("Locatie", value="Amsterdam, Nederland", help="De stad of regio waar je wilt zoeken.")
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
     expand_categories = st.sidebar.checkbox("AI Categorieën Uitbreiding", value=True, help="Laat AI synoniemen verzamelen voor Maps categorieën.")
+    maps_contact_enrichment = st.sidebar.checkbox("Company contacts enrichment (Apify)", value=True, help="Gebruik de contact-verrijking van de Maps actor (email, telefoon, socials).")
 
 # --- SEARCH TOGGLE ---
 st.sidebar.divider()
@@ -135,6 +181,28 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("Stap 1: Keywords")
     keywords_area = st.text_area("Plak keywords (onder elkaar)", height=150, placeholder="Loodgieter\nSchilder")
+    domain_for_suggestions = st.text_input("Website domein voor keyword suggesties (optioneel)", placeholder="voorbeeld.nl")
+    suggestions_limit = st.slider("Max keyword suggesties", 5, 100, 25)
+    include_manual_in_suggestions = st.checkbox("Gebruik handmatige keywords ook als seed", value=True)
+
+    if "keyword_suggestions" not in st.session_state:
+        st.session_state["keyword_suggestions"] = []
+
+    fetch_suggestions_clicked = st.button("🔎 Haal keyword suggesties op (DataForSEO)")
+
+    suggestion_map = {
+        f"{item['keyword']} (SV: {item['search_volume']})": item
+        for item in st.session_state["keyword_suggestions"]
+    }
+    selected_suggestion_labels = st.multiselect(
+        "Selecteer suggesties om toe te voegen",
+        options=list(suggestion_map.keys())
+    )
+    selected_suggestion_keywords = [suggestion_map[label]["keyword"] for label in selected_suggestion_labels]
+    selected_suggestion_volumes = {
+        suggestion_map[label]["keyword"]: suggestion_map[label]["search_volume"]
+        for label in selected_suggestion_labels
+    }
 
 with col2:
     st.subheader("Stap 2: Uitsluitingen (Optioneel)")
@@ -489,14 +557,209 @@ def get_maps_categories(keyword, ai_client):
         st.error(f"Fout bij semantisch zoeken naar categorieën: {e}")
         return [keyword]
 
+def dataforseo_post(endpoint, tasks, login, password):
+    response = requests.post(
+        f"{DATAFORSEO_BASE_URL}{endpoint}",
+        auth=(login, password),
+        json=tasks,
+        timeout=45
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status_code") != 20000:
+        raise RuntimeError(payload.get("status_message", "DataForSEO request failed"))
+    return payload.get("tasks", [])
+
+def as_list(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+def normalize_social_values(values):
+    normalized = []
+    for value in as_list(values):
+        if isinstance(value, dict):
+            candidate = value.get("url") or value.get("link") or value.get("profileUrl")
+        else:
+            candidate = str(value)
+        candidate = (candidate or "").strip()
+        if candidate:
+            normalized.append(candidate)
+    return normalized
+
+def normalize_phone_value(value):
+    if not value:
+        return ""
+    candidate = str(value).strip()
+    digits = re.sub(r"\D", "", candidate)
+    if len(digits) < 8:
+        return ""
+    return candidate
+
+def extract_phone_candidates_from_soup(soup):
+    phones = set()
+    for link in soup.find_all('a', href=True):
+        href = (link.get('href') or '').strip()
+        if href.lower().startswith('tel:'):
+            candidate = normalize_phone_value(unquote(href[4:]).split('?', 1)[0])
+            if candidate:
+                phones.add(candidate)
+    text = soup.get_text(separator=' ', strip=True)
+    for match in PHONE_REGEX.findall(text):
+        candidate = normalize_phone_value(match)
+        if candidate:
+            phones.add(candidate)
+    return sorted(phones)
+
+def enrich_contacts_from_website(home_url):
+    enriched = {"emails": [], "phones": [], "social_links": []}
+    try:
+        response = HTTP_SESSION.get(home_url, timeout=10, headers=REQUEST_HEADERS)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        emails = set(extract_emails_from_soup(soup))
+        phones = set(extract_phone_candidates_from_soup(soup))
+        social_links = set(extract_social_links_from_soup(soup, home_url))
+
+        contact_candidates = []
+        for link in soup.find_all('a', href=True):
+            href = (link.get('href') or '').strip().lower()
+            if any(token in href for token in ['/contact', '/contact-us', '/contacten', '/over-ons', '/about']):
+                contact_candidates.append(urljoin(home_url, href))
+
+        for url in list(dict.fromkeys(contact_candidates))[:2]:
+            try:
+                contact_response = HTTP_SESSION.get(url, timeout=8, headers=REQUEST_HEADERS)
+                contact_response.raise_for_status()
+                contact_soup = BeautifulSoup(contact_response.text, 'html.parser')
+                emails.update(extract_emails_from_soup(contact_soup))
+                phones.update(extract_phone_candidates_from_soup(contact_soup))
+                social_links.update(extract_social_links_from_soup(contact_soup, url))
+            except Exception:
+                continue
+
+        enriched["emails"] = sorted(emails)
+        enriched["phones"] = sorted(phones)
+        enriched["social_links"] = sorted(social_links)
+    except Exception:
+        return enriched
+    return enriched
+
+def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password, location_name, language_name):
+    suggestions = {}
+
+    if domain_seed.strip():
+        domain_task = [{
+            "target": extract_domain(domain_seed),
+            "location_name": location_name,
+            "language_name": language_name,
+            "limit": limit,
+            "order_by": ["search_volume,desc"]
+        }]
+        domain_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_site/live", domain_task, login, password)
+        for task in domain_tasks:
+            for result in task.get("result", []):
+                for item in result.get("items", []):
+                    keyword = (item.get("keyword") or "").strip()
+                    if keyword:
+                        suggestions[keyword] = max(item.get("search_volume", 0), suggestions.get(keyword, 0))
+
+    if manual_keywords:
+        keyword_task = [{
+            "keywords": manual_keywords,
+            "location_name": location_name,
+            "language_name": language_name,
+            "include_seed_keyword": True,
+            "limit": limit,
+            "order_by": ["search_volume,desc"]
+        }]
+        keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
+        for task in keyword_tasks:
+            for result in task.get("result", []):
+                for item in result.get("items", []):
+                    keyword = (item.get("keyword") or "").strip()
+                    if keyword:
+                        suggestions[keyword] = max(item.get("search_volume", 0), suggestions.get(keyword, 0))
+
+    rows = [{"keyword": kw, "search_volume": volume} for kw, volume in suggestions.items()]
+    return sorted(rows, key=lambda x: x["search_volume"], reverse=True)[:limit]
+
+def get_dataforseo_organic_results(keywords, target_domain, pages, login, password):
+    tasks = []
+    language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
+    location_name = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+    for keyword in keywords:
+        tasks.append({
+            "keyword": keyword,
+            "se_domain": target_domain,
+            "location_name": location_name,
+            "language_name": language_name,
+            "depth": pages * 10
+        })
+
+    task_results = dataforseo_post("/serp/google/organic/live/advanced", tasks, login, password)
+    organic_rows = []
+    for task in task_results:
+        task_keyword = task.get("data", {}).get("keyword", "Onbekend")
+        for result in task.get("result", []):
+            for item in result.get("items", []):
+                if item.get("type") != "organic":
+                    continue
+                url = item.get("url")
+                if not url:
+                    continue
+                organic_rows.append({
+                    "keyword": task_keyword,
+                    "url": url,
+                    "title": item.get("title", "")
+                })
+    return organic_rows
+
 # ========================================================
 # 4. RUNNER
 # ========================================================
+if fetch_suggestions_clicked:
+    manual_keywords_for_suggestions = [k.strip() for k in keywords_area.split('\n') if k.strip()]
+    if not dfs_login or not dfs_password:
+        st.error("Vul DataForSEO login en password in om suggesties op te halen.")
+    elif not domain_for_suggestions.strip() and (not include_manual_in_suggestions or not manual_keywords_for_suggestions):
+        st.error("Vul een domein in of voeg handmatige keywords toe als seed.")
+    else:
+        try:
+            language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
+            suggestion_location = location_query if use_maps else DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+            st.session_state["keyword_suggestions"] = get_keyword_suggestions(
+                manual_keywords=manual_keywords_for_suggestions if include_manual_in_suggestions else [],
+                domain_seed=domain_for_suggestions,
+                limit=suggestions_limit,
+                login=dfs_login,
+                password=dfs_password,
+                location_name=suggestion_location,
+                language_name=language_name
+            )
+            st.success(f"{len(st.session_state['keyword_suggestions'])} keyword suggesties geladen.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Keyword suggesties ophalen mislukt: {e}")
+
 if st.button("🚀 Start Analyse", type="primary"):
-    if not api_token or not oa_token or not keywords_area:
-        st.error("Vul alle API keys in en voer keywords in.")
+    manual_keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
+    selected_keywords = list(dict.fromkeys(manual_keywords + selected_suggestion_keywords))
+    keyword_volumes = selected_suggestion_volumes.copy()
+    for kw in manual_keywords:
+        keyword_volumes.setdefault(kw, 0)
+
+    if not oa_token or not selected_keywords:
+        st.error("Vul OpenAI key in en voeg minimaal 1 keyword toe (handmatig en/of suggesties).")
     elif not use_maps and not use_serp:
         st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
+    elif use_maps and not api_token:
+        st.error("Vul Apify API token in voor Google Maps.")
+    elif (use_serp or selected_suggestion_keywords or domain_for_suggestions.strip()) and (not dfs_login or not dfs_password):
+        st.error("Vul DataForSEO login + password in voor Search en keyword suggesties.")
     elif use_serp and not PARTNER_TERMS:
         st.error("Selecteer ten minste één taal of voer een eigen term in voor de Search Scraper.")
     else:
@@ -514,9 +777,9 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.error(f"Fout bij inladen bestand: {e}")
                 st.stop()
         
-        apify = ApifyClient(api_token)
+        apify = ApifyClient(api_token) if use_maps else None
         openai_c = OpenAI(api_key=oa_token)
-        keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
+        keywords = selected_keywords
         
         maps_opportunities = []
         search_opportunities = []
@@ -547,7 +810,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                         "locationQuery": location_query,
                         "language": lang_code,
                         "maxCrawledPlacesPerSearch": maps_max_results,
-                        "extractContacts": True
+                        "extractContacts": maps_contact_enrichment
                     }
                     if expand_categories and all_categories:
                         run_input["categories"] = all_categories
@@ -564,10 +827,19 @@ if st.button("🚀 Start Analyse", type="primary"):
                             if dom not in existing and dom not in SOCIAL_DOMAINS:
                                 st.write(f"Maps Bedrijf gevonden: **{title}**. Partner-check...")
                                 
-                                maps_emails = item.get('emails', [])
-                                maps_phone = item.get('phoneUnformatted', item.get('phone', 'Geen'))
-                                maps_kw = item.get('categoryName', keywords[0] if keywords else 'Onbekend')
-                                
+                                maps_emails = as_list(item.get('emails'))
+                                maps_phone = normalize_phone_value(item.get('phoneUnformatted', item.get('phone', '')))
+                                maps_social_links = normalize_social_values(item.get('socialProfiles')) + normalize_social_values(item.get('socials'))
+                                maps_kw = item.get('searchString') or item.get('searchQuery') or (keywords[0] if keywords else 'Onbekend')
+
+                                fallback_contacts = {"emails": [], "phones": [], "social_links": []}
+                                needs_fallback = not maps_emails or not maps_phone or not maps_social_links
+                                if needs_fallback and website:
+                                    fallback_contacts = enrich_contacts_from_website(website)
+
+                                final_emails = maps_emails if maps_emails else fallback_contacts["emails"]
+                                final_phone = maps_phone if maps_phone else (fallback_contacts["phones"][0] if fallback_contacts["phones"] else "Geen")
+                                 
                                 # Let op: force_summary=True zodat AI ALTIJD de omschrijving pakt
                                 analysis = process_site(
                                     website,
@@ -583,10 +855,12 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
                                     "Omschrijving": analysis['Omschrijving'] if analysis else "Geen beschrijving",
                                     "Category": item.get('categoryName', 'Onbekend'),
+                                    "Keyword": maps_kw,
+                                    "Search Volume": keyword_volumes.get(maps_kw, 0),
                                     "Domain": dom,
-                                    "Telefoon": maps_phone,
-                                    "Emails": ", ".join(maps_emails) if maps_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
-                                    "Social Links": ", ".join(analysis['social_links']) if analysis and analysis['social_links'] else "",
+                                    "Telefoon": final_phone,
+                                    "Emails": ", ".join(final_emails) if final_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
+                                    "Social Links": ", ".join(sorted(set((maps_social_links or []) + fallback_contacts["social_links"] + (analysis['social_links'] if analysis else [])))),
                                     "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
                                     "Score Linkbuilding": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
                                 })
@@ -598,54 +872,54 @@ if st.button("🚀 Start Analyse", type="primary"):
             # ROUTE B: GOOGLE SEARCH SEO BACKLINKS
             # ---------------------------------------------------------
             if use_serp:
-                st.write("📡 Google Search Scraper is gestart...")
+                st.write("📡 Google Search Scraper (DataForSEO live organic) is gestart...")
                 try:
-                    run = apify.actor("apify/google-search-scraper").call(run_input={
-                        "queries": "\n".join(keywords),
-                        "maxPagesPerQuery": pages,
-                        "resultsPerPage": 10,
-                        "domain": target_domain
-                    })
+                    organic_results = get_dataforseo_organic_results(
+                        keywords=keywords,
+                        target_domain=target_domain,
+                        pages=pages,
+                        login=dfs_login,
+                        password=dfs_password
+                    )
                     
                     st.write("🔎 Search Domeinen filteren en scannen op partnerpagina's...")
-                    for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
-                        kw = item.get('searchQuery', {}).get('term') or "Onbekend"
-                        for result in item.get('organicResults', []):
-                            url = result.get('url')
-                            dom = extract_domain(url)
-                            title = result.get('title', dom)
-                            
-                            if dom not in existing and dom not in SOCIAL_DOMAINS:
-                                st.write(f"Nieuw Search domein via '{kw}': **{dom}**. Partner-check...")
-                                
-                                # Let op: force_summary=False (standaard) zodat AI de Lazy methode gebruikt
-                                analysis = process_site(
-                                    url,
-                                    openai_c,
-                                    PARTNER_TERMS,
-                                    kw,
-                                    force_summary=False,
-                                    check_404=check_404_outbound,
-                                    max_link_checks=max_outbound_checks
-                                )
-                                
-                                # Bij Search slaan we ze ALLEEN op als er een partnerpagina is gevonden
-                                if analysis and analysis['url']:
-                                    search_opportunities.append({
-                                        "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                        "Omschrijving": analysis['Omschrijving'],
-                                        "Category": kw,
-                                        "Domain": dom,
-                                        "Telefoon": "N/A",
-                                        "Emails": analysis['emails'],
-                                        "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
-                                        "Partner URL": analysis['url'],
-                                        "Score Linkbuilding": analysis['ai'],
-                                        "Broken Outbound Links": json.dumps(analysis['brokenLinks']) if analysis['brokenLinks'] else "no links found"
-                                    })
-                                existing.add(dom) 
+                    for result in organic_results:
+                        kw = result.get('keyword') or "Onbekend"
+                        url = result.get('url')
+                        dom = extract_domain(url)
+                        title = result.get('title', dom)
+
+                        if dom not in existing and dom not in SOCIAL_DOMAINS:
+                            st.write(f"Nieuw Search domein via '{kw}': **{dom}**. Partner-check...")
+
+                            analysis = process_site(
+                                url,
+                                openai_c,
+                                PARTNER_TERMS,
+                                kw,
+                                force_summary=False,
+                                check_404=check_404_outbound,
+                                max_link_checks=max_outbound_checks
+                            )
+
+                            if analysis and analysis['url']:
+                                search_opportunities.append({
+                                    "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
+                                    "Omschrijving": analysis['Omschrijving'],
+                                    "Category": kw,
+                                    "Keyword": kw,
+                                    "Search Volume": keyword_volumes.get(kw, 0),
+                                    "Domain": dom,
+                                    "Telefoon": "N/A",
+                                    "Emails": analysis['emails'],
+                                    "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
+                                    "Partner URL": analysis['url'],
+                                    "Score Linkbuilding": analysis['ai'],
+                                    "Broken Outbound Links": json.dumps(analysis['brokenLinks']) if analysis['brokenLinks'] else "no links found"
+                                })
+                            existing.add(dom)
                 except Exception as e:
-                    st.error(f"Apify Search call mislukt: {e}")
+                    st.error(f"DataForSEO Search call mislukt: {e}")
 
             status.update(label="Analyse voltooid!", state="complete")
 
@@ -659,7 +933,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(df_maps, use_container_width=True)
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
@@ -669,7 +943,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab2:
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
-                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                     st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                     st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
@@ -681,7 +955,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(df_maps, use_container_width=True)
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
@@ -693,7 +967,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📡 Google Search Resultaten")
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
-                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
                 st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                 st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")

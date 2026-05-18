@@ -1,32 +1,26 @@
 # 🚀 AI Backlink Opportunity Finder
 
-Een krachtige tool om automatisch linkbuilding kansen te vinden door Google Search te combineren met AI-analyse. Deze app scant Google resultaten, filtert domeinen waar je al een link van hebt, en gebruikt OpenAI om de "Partner/Adverteer" pagina's van nieuwe websites te analyseren.
+Deze Streamlit app combineert Google Maps leads met SEO-partnerpagina analyse.
 
 ## ✨ Functionaliteiten
 
-- **Google Search Integration:** Scant de top 20 resultaten voor jouw specifieke keywords via Apify.
-- **Smart Filtering:** Upload een lijst met je huidige 'referring domains' om dubbele outreach te voorkomen.
-- **Deep Scan:** Zoekt automatisch naar pagina's zoals `/adverteren`, `/partner` of `/gastblog`.
-- **AI Analysis:** Gebruikt GPT-4o-mini om de inhoud van de partnerpagina te beoordelen op potentie (score 0-10).
-- **Contact Extractie:** Vindt direct e-mailadressen op de partnerpagina voor snelle outreach.
+- **Google Maps via Apify:** Lokale bedrijven ophalen met contact-verrijking.
+- **Google Search via DataForSEO (live organic):** Organische resultaten ophalen per keyword.
+- **Keyword suggesties met volume:** Suggesties op basis van handmatige keywords en/of domein.
+- **Partnerpagina detectie + AI scoring:** Analyse van linkbuilding-kansen met OpenAI.
+- **Contact fallback scraping:** Als verrijking mist, wordt website scraping gebruikt voor email/social/telefoon.
 
-## 🛠️ Installatie & Setup
+## 🔑 Benodigde API keys
 
-### 1. Repository clonen of aanmaken
-Zorg dat de volgende bestanden in je repository staan:
-- `app.py`: De hoofdcode van de applicatie.
-- `requirements.txt`: De benodigde Python bibliotheken.
-- `README.md`: Deze handleiding.
+1. **Apify API Token** (voor Google Maps)
+2. **DataForSEO Login + Password** (voor Search + keyword suggesties)
+3. **OpenAI API Key** (voor AI analyse)
 
-### 2. API Keys configureren
-Je hebt twee API keys nodig:
-1. **Apify API Token:** Voor het scrapen van Google Search.
-2. **OpenAI API Key:** Voor de inhoudelijke analyse van de websites.
+Voor Streamlit Cloud, zet deze in Secrets:
 
-### 3. Deployen naar Streamlit Cloud
-1. Ga naar [share.streamlit.io](https://share.streamlit.io/).
-2. Verbind je GitHub account en selecteer deze repository.
-3. **Belangrijk:** Ga naar *Advanced Settings* > *Secrets* en voeg je keys toe:
-   ```toml
-   APIFY = "jouw_apify_key"
-   OPENAI = "jouw_openai_key"
+```toml
+APIFY = "jouw_apify_token"
+DATAFORSEO_LOGIN = "jouw_dataforseo_login"
+DATAFORSEO_PASSWORD = "jouw_dataforseo_password"
+OPENAI = "jouw_openai_key"
+```
