@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urljoin, unquote
 from openai import OpenAI
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from maps_dataforseo import fetch_maps_places
 
 DATAFORSEO_BASE_URL = "https://api.dataforseo.com/v3"
 DATAFORSEO_LANGUAGE_BY_DOMAIN = {
@@ -113,12 +114,31 @@ location_query = "Amsterdam, Nederland"
 maps_max_results = 10
 expand_categories = True
 maps_contact_enrichment = True
+maps_provider_choice = "Auto"
+resolved_maps_provider = "apify"
 
 if use_maps:
+    maps_provider_choice = st.sidebar.selectbox("Maps provider", ["Auto", "Apify", "DataForSEO"], index=0)
     location_query = st.sidebar.text_input("Locatie", value="Amsterdam, Nederland", help="De stad of regio waar je wilt zoeken.")
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
     expand_categories = st.sidebar.checkbox("AI Categorieën Uitbreiding", value=True, help="Laat AI synoniemen verzamelen voor Maps categorieën.")
-    maps_contact_enrichment = st.sidebar.checkbox("Company contacts enrichment (Apify)", value=True, help="Gebruik de contact-verrijking van de Maps actor (email, telefoon, socials).")
+
+    if maps_provider_choice == "Auto":
+        resolved_maps_provider = "apify" if api_token.strip() else "dataforseo"
+    elif maps_provider_choice == "Apify":
+        resolved_maps_provider = "apify"
+    else:
+        resolved_maps_provider = "dataforseo"
+
+    maps_contact_enrichment = st.sidebar.checkbox(
+        "Company contacts enrichment (Apify)",
+        value=True,
+        help="Gebruik de contact-verrijking van de Maps actor (email, telefoon, socials).",
+        disabled=resolved_maps_provider != "apify"
+    )
+
+    if resolved_maps_provider == "dataforseo":
+        st.sidebar.info("Maps draait via DataForSEO fallback (geen directe email enrichment).")
 
 # --- SEARCH TOGGLE ---
 st.sidebar.divider()
@@ -756,9 +776,14 @@ if st.button("🚀 Start Analyse", type="primary"):
         st.error("Vul OpenAI key in en voeg minimaal 1 keyword toe (handmatig en/of suggesties).")
     elif not use_maps and not use_serp:
         st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
-    elif use_maps and not api_token:
+    elif use_maps and resolved_maps_provider == "apify" and not api_token:
         st.error("Vul Apify API token in voor Google Maps.")
-    elif (use_serp or selected_suggestion_keywords or domain_for_suggestions.strip()) and (not dfs_login or not dfs_password):
+    elif (
+        use_serp
+        or selected_suggestion_keywords
+        or domain_for_suggestions.strip()
+        or (use_maps and resolved_maps_provider == "dataforseo")
+    ) and (not dfs_login or not dfs_password):
         st.error("Vul DataForSEO login + password in voor Search en keyword suggesties.")
     elif use_serp and not PARTNER_TERMS:
         st.error("Selecteer ten minste één taal of voer een eigen term in voor de Search Scraper.")
@@ -777,7 +802,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.error(f"Fout bij inladen bestand: {e}")
                 st.stop()
         
-        apify = ApifyClient(api_token) if use_maps else None
+        apify = ApifyClient(api_token) if use_maps and resolved_maps_provider == "apify" else None
         openai_c = OpenAI(api_key=oa_token)
         keywords = selected_keywords
         
@@ -790,9 +815,10 @@ if st.button("🚀 Start Analyse", type="primary"):
             # ROUTE A: GOOGLE MAPS LOKALE LEADS
             # ---------------------------------------------------------
             if use_maps:
-                st.write("📍 Google Maps Scraper is gestart...")
+                st.write(f"📍 Google Maps Scraper is gestart via {resolved_maps_provider.title()}...")
                 lang_code = target_domain.split('.')[-1]
                 if lang_code == "com": lang_code = "en"
+                language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
                 
                 all_categories = []
                 if expand_categories:
@@ -805,20 +831,34 @@ if st.button("🚀 Start Analyse", type="primary"):
 
                 st.write(f"🗺️ Maps zoeken in {location_query}...")
                 try:
-                    run_input = {
-                        "searchStringsArray": keywords,
-                        "locationQuery": location_query,
-                        "language": lang_code,
-                        "maxCrawledPlacesPerSearch": maps_max_results,
-                        "extractContacts": maps_contact_enrichment
-                    }
-                    if expand_categories and all_categories:
-                        run_input["categories"] = all_categories
+                    if resolved_maps_provider == "apify":
+                        run_input = {
+                            "searchStringsArray": keywords,
+                            "locationQuery": location_query,
+                            "language": lang_code,
+                            "maxCrawledPlacesPerSearch": maps_max_results,
+                            "extractContacts": maps_contact_enrichment
+                        }
+                        if expand_categories and all_categories:
+                            run_input["categories"] = all_categories
 
-                    run = apify.actor("nwua9Gu5YrADL7ZDj").call(run_input=run_input)
-                    
+                        run = apify.actor("nwua9Gu5YrADL7ZDj").call(run_input=run_input)
+                        maps_items = list(apify.dataset(run["defaultDatasetId"]).iterate_items())
+                    else:
+                        maps_keywords = keywords + all_categories if expand_categories and all_categories else keywords
+                        maps_keywords = list(dict.fromkeys([k for k in maps_keywords if str(k).strip()]))
+                        maps_items = fetch_maps_places(
+                            keywords=maps_keywords,
+                            location_name=location_query,
+                            language_name=language_name,
+                            depth=maps_max_results,
+                            se_domain=target_domain,
+                            login=dfs_login,
+                            password=dfs_password
+                        )
+
                     st.write("🔎 Maps Resultaten verwerken...")
-                    for item in apify.dataset(run["defaultDatasetId"]).iterate_items():
+                    for item in maps_items:
                         website = item.get('website')
                         title = item.get('title')
                         
@@ -866,7 +906,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 })
                                 existing.add(dom)
                 except Exception as e:
-                    st.error(f"Apify Maps call mislukt: {e}")
+                    st.error(f"Google Maps call mislukt ({resolved_maps_provider.title()}): {e}")
 
             # ---------------------------------------------------------
             # ROUTE B: GOOGLE SEARCH SEO BACKLINKS
