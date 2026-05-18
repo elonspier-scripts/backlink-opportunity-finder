@@ -51,10 +51,10 @@ def fetch_maps_places(keywords, location_name, language_name, depth, se_domain, 
     task_results = _dataforseo_post("/serp/google/maps/live/advanced", tasks, login, password)
 
     rows = []
-    for task in task_results:
-        task_keyword = task.get("data", {}).get("keyword", "")
-        for result in task.get("result", []):
-            for item in result.get("items", []):
+    for task in task_results or []:
+        task_keyword = (task or {}).get("data", {}).get("keyword", "")
+        for result in (task or {}).get("result") or []:
+            for item in (result or {}).get("items") or []:
                 website = _normalize_website(item)
                 rows.append(
                     {

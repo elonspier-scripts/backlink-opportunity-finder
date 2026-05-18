@@ -671,6 +671,16 @@ def enrich_contacts_from_website(home_url):
 def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password, location_name, language_name):
     suggestions = {}
 
+    def collect_items(tasks_payload):
+        for task in tasks_payload or []:
+            for result in (task or {}).get("result") or []:
+                for item in (result or {}).get("items") or []:
+                    keyword = (item.get("keyword") or "").strip()
+                    if not keyword:
+                        continue
+                    search_volume = item.get("search_volume") or 0
+                    suggestions[keyword] = max(search_volume, suggestions.get(keyword, 0))
+
     if domain_seed.strip():
         domain_task = [{
             "target": extract_domain(domain_seed),
@@ -680,12 +690,7 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
             "order_by": ["search_volume,desc"]
         }]
         domain_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_site/live", domain_task, login, password)
-        for task in domain_tasks:
-            for result in task.get("result", []):
-                for item in result.get("items", []):
-                    keyword = (item.get("keyword") or "").strip()
-                    if keyword:
-                        suggestions[keyword] = max(item.get("search_volume", 0), suggestions.get(keyword, 0))
+        collect_items(domain_tasks)
 
     if manual_keywords:
         keyword_task = [{
@@ -697,12 +702,7 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
             "order_by": ["search_volume,desc"]
         }]
         keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
-        for task in keyword_tasks:
-            for result in task.get("result", []):
-                for item in result.get("items", []):
-                    keyword = (item.get("keyword") or "").strip()
-                    if keyword:
-                        suggestions[keyword] = max(item.get("search_volume", 0), suggestions.get(keyword, 0))
+        collect_items(keyword_tasks)
 
     rows = [{"keyword": kw, "search_volume": volume} for kw, volume in suggestions.items()]
     return sorted(rows, key=lambda x: x["search_volume"], reverse=True)[:limit]
@@ -722,10 +722,10 @@ def get_dataforseo_organic_results(keywords, target_domain, pages, login, passwo
 
     task_results = dataforseo_post("/serp/google/organic/live/advanced", tasks, login, password)
     organic_rows = []
-    for task in task_results:
-        task_keyword = task.get("data", {}).get("keyword", "Onbekend")
-        for result in task.get("result", []):
-            for item in result.get("items", []):
+    for task in task_results or []:
+        task_keyword = (task or {}).get("data", {}).get("keyword", "Onbekend")
+        for result in (task or {}).get("result") or []:
+            for item in (result or {}).get("items") or []:
                 if item.get("type") != "organic":
                     continue
                 url = item.get("url")
