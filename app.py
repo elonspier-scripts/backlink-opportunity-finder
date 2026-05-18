@@ -682,15 +682,27 @@ def enrich_contacts_from_website(home_url):
 
 def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password, location_name, language_name):
     suggestions = {}
+    task_errors = []
 
     def collect_items(tasks_payload):
         for task in tasks_payload or []:
+            task_status = (task or {}).get("status_code")
+            if task_status and task_status != 20000:
+                task_errors.append((task or {}).get("status_message", "Onbekende DataForSEO task fout"))
             for result in (task or {}).get("result") or []:
                 for item in (result or {}).get("items") or []:
-                    keyword = (item.get("keyword") or "").strip()
+                    keyword = (item.get("keyword") or item.get("key") or "").strip()
+                    if not keyword:
+                        keyword_info = (item.get("keyword_info") or {})
+                        keyword = (keyword_info.get("keyword") or "").strip()
                     if not keyword:
                         continue
-                    search_volume = item.get("search_volume") or 0
+                    keyword_info = (item.get("keyword_info") or {})
+                    search_volume = item.get("search_volume")
+                    if search_volume is None:
+                        search_volume = keyword_info.get("search_volume")
+                    if search_volume is None:
+                        search_volume = 0
                     suggestions[keyword] = max(search_volume, suggestions.get(keyword, 0))
 
     if domain_seed.strip():
@@ -717,6 +729,8 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
         collect_items(keyword_tasks)
 
     rows = [{"keyword": kw, "search_volume": volume} for kw, volume in suggestions.items()]
+    if not rows and task_errors:
+        raise RuntimeError("; ".join(dict.fromkeys(task_errors)))
     return sorted(rows, key=lambda x: x["search_volume"], reverse=True)[:limit]
 
 def get_dataforseo_organic_results(keywords, target_domain, pages, login, password):
@@ -762,7 +776,7 @@ if fetch_suggestions_clicked:
     else:
         try:
             language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
-            suggestion_location = location_query if use_maps else DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+            suggestion_location = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
             st.session_state["keyword_suggestions"] = get_keyword_suggestions(
                 manual_keywords=manual_keywords_for_suggestions if include_manual_in_suggestions else [],
                 domain_seed=domain_for_suggestions,
@@ -772,7 +786,10 @@ if fetch_suggestions_clicked:
                 location_name=suggestion_location,
                 language_name=language_name
             )
-            st.success(f"{len(st.session_state['keyword_suggestions'])} keyword suggesties geladen.")
+            if st.session_state["keyword_suggestions"]:
+                st.success(f"{len(st.session_state['keyword_suggestions'])} keyword suggesties geladen.")
+            else:
+                st.warning("Geen keyword suggesties gevonden voor deze input/combinatie. Probeer een ander domein of bredere seed keyword.")
             st.rerun()
         except Exception as e:
             st.error(f"Keyword suggesties ophalen mislukt: {e}")
