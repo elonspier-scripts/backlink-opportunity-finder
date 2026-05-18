@@ -5,13 +5,25 @@ DATAFORSEO_BASE_URL = "https://api.dataforseo.com/v3"
 
 
 def _dataforseo_post(endpoint, tasks, login, password):
+    safe_login = (login or "").strip()
+    safe_password = (password or "").strip()
+    if not safe_login or not safe_password:
+        raise RuntimeError("DataForSEO login/password ontbreekt of is leeg.")
+
     response = requests.post(
         f"{DATAFORSEO_BASE_URL}{endpoint}",
-        auth=(login, password),
+        auth=(safe_login, safe_password),
         json=tasks,
         timeout=45,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        if response.status_code == 401:
+            raise RuntimeError(
+                "DataForSEO authenticatie mislukt (401). Controleer login/password, verwijder extra spaties, en gebruik je DataForSEO API credentials."
+            ) from exc
+        raise
     payload = response.json()
     if payload.get("status_code") != 20000:
         raise RuntimeError(payload.get("status_message", "DataForSEO request failed"))
