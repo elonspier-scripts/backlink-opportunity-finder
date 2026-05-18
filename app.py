@@ -709,9 +709,7 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
         domain_task = [{
             "target": extract_domain(domain_seed),
             "location_name": location_name,
-            "language_name": language_name,
-            "limit": limit,
-            "order_by": ["search_volume,desc"]
+            "language_name": language_name
         }]
         domain_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_site/live", domain_task, login, password)
         collect_items(domain_tasks)
@@ -721,9 +719,7 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
             "keywords": manual_keywords,
             "location_name": location_name,
             "language_name": language_name,
-            "include_seed_keyword": True,
-            "limit": limit,
-            "order_by": ["search_volume,desc"]
+            "include_seed_keyword": True
         }]
         keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
         collect_items(keyword_tasks)
