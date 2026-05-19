@@ -112,11 +112,9 @@ st.sidebar.divider()
 st.sidebar.header("📍 Lokale Leads (Google Maps)")
 use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
 maps_max_results = 10
-use_related_keywords = True
 
 if use_maps:
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
-    use_related_keywords = st.sidebar.checkbox("Related keywords uitbreiding", value=True, help="Breid input keywords uit met gerelateerde zoekwoorden via DataForSEO.")
     st.sidebar.info("Maps draait via DataForSEO + website contact scraping fallback.")
 
 # --- SEARCH TOGGLE ---
@@ -183,8 +181,6 @@ maps_language_code = "en"
 with col1:
     st.subheader("Stap 1: Keywords")
     keywords_area = st.text_area("Plak keywords (onder elkaar)", height=150, placeholder="Loodgieter\nSchilder")
-    domain_for_related_keywords = st.text_input("Website domein (optioneel, voor related keywords)", placeholder="voorbeeld.nl")
-    related_keywords_limit = st.slider("Max related keywords", 5, 100, 25)
 
     if use_maps:
         st.markdown("**Maps instellingen**")
@@ -201,7 +197,7 @@ with col1:
         )
         maps_language_code = maps_language_label.split("(")[-1].rstrip(")")
 
-    st.caption("De analyse gebruikt je input keywords en kan deze automatisch uitbreiden met related keywords.")
+    st.caption("De analyse gebruikt alleen de keywords uit het input veld.")
 
 with col2:
     st.subheader("Stap 2: Uitsluitingen (Optioneel)")
@@ -631,96 +627,6 @@ def enrich_contacts_from_website(home_url):
         return enriched
     return enriched
 
-def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password, location_name, language_name):
-    suggestions = {}
-    task_errors = []
-
-    def collect_items(tasks_payload):
-        for task in tasks_payload or []:
-            task_status = (task or {}).get("status_code")
-            if task_status and task_status != 20000:
-                task_errors.append((task or {}).get("status_message", "Onbekende DataForSEO task fout"))
-            for result in (task or {}).get("result") or []:
-                for item in (result or {}).get("items") or []:
-                    keyword = (item.get("keyword") or item.get("key") or "").strip()
-                    if not keyword:
-                        keyword_info = (item.get("keyword_info") or {})
-                        keyword = (keyword_info.get("keyword") or "").strip()
-                    if not keyword:
-                        continue
-                    keyword_info = (item.get("keyword_info") or {})
-                    search_volume = item.get("search_volume")
-                    if search_volume is None:
-                        search_volume = keyword_info.get("search_volume")
-                    if search_volume is None:
-                        search_volume = 0
-                    suggestions[keyword] = max(search_volume, suggestions.get(keyword, 0))
-
-    def collect_ranked_items(tasks_payload):
-        for task in tasks_payload or []:
-            task_status = (task or {}).get("status_code")
-            if task_status and task_status != 20000:
-                task_errors.append((task or {}).get("status_message", "Onbekende DataForSEO task fout"))
-            for result in (task or {}).get("result") or []:
-                for item in (result or {}).get("items") or []:
-                    keyword_data = (item.get("keyword_data") or {})
-                    keyword = (item.get("keyword") or keyword_data.get("keyword") or "").strip()
-                    if not keyword:
-                        continue
-
-                    keyword_info = (keyword_data.get("keyword_info") or {})
-                    search_volume = item.get("search_volume")
-                    if search_volume is None:
-                        search_volume = keyword_info.get("search_volume")
-                    if search_volume is None:
-                        search_volume = 0
-                    suggestions[keyword] = max(search_volume, suggestions.get(keyword, 0))
-
-    if domain_seed.strip():
-        ranked_endpoint = "/dataforseo_labs/google/ranked_keywords/live"
-        domain_target = extract_domain(domain_seed)
-        primary_payload = {
-            "target": domain_target,
-            "language_name": language_name,
-            "location_name": location_name,
-            "limit": max(limit, 100)
-        }
-
-        ranked_payload_variants = [
-            primary_payload,
-            {"target": domain_target},
-        ]
-
-        ranked_error = None
-        for payload in ranked_payload_variants:
-            try:
-                ranked_tasks = dataforseo_post(ranked_endpoint, [payload], login, password)
-                collect_ranked_items(ranked_tasks)
-                ranked_error = None
-                break
-            except Exception as e:
-                ranked_error = e
-
-        if ranked_error and not suggestions:
-            task_errors.append(str(ranked_error))
-
-    if manual_keywords:
-        for manual_keyword in manual_keywords:
-            keyword_task = [{
-                "keywords": [manual_keyword]
-            }]
-            keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
-            collect_items(keyword_tasks)
-
-        for manual_keyword in manual_keywords:
-            if manual_keyword and manual_keyword not in suggestions:
-                suggestions[manual_keyword] = 0
-
-    rows = [{"keyword": kw, "search_volume": volume} for kw, volume in suggestions.items()]
-    if not rows and task_errors:
-        raise RuntimeError("; ".join(dict.fromkeys(task_errors)))
-    return sorted(rows, key=lambda x: x["search_volume"], reverse=True)[:limit]
-
 def get_dataforseo_organic_results(keywords, target_domain, pages, login, password):
     language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
     location_name = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
@@ -798,47 +704,18 @@ if st.button("🚀 Start Analyse", type="primary"):
     manual_keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
     keywords = list(dict.fromkeys(manual_keywords))
     keyword_volumes = {kw: 0 for kw in manual_keywords}
-    related_keywords = []
 
     if not oa_token:
         st.error("Vul OpenAI key in.")
-    elif not keywords and not domain_for_related_keywords.strip():
-        st.error("Voeg minimaal 1 keyword toe in het keyword veld of vul een domein in.")
+    elif not keywords:
+        st.error("Voeg minimaal 1 keyword toe in het keyword veld.")
     elif not use_maps and not use_serp:
         st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
-    elif (
-        use_serp
-        or domain_for_related_keywords.strip()
-        or use_maps
-    ) and (not dfs_login or not dfs_password):
-        st.error("Vul DataForSEO login + password in voor Maps/Search en related keywords.")
+    elif (use_serp or use_maps) and (not dfs_login or not dfs_password):
+        st.error("Vul DataForSEO login + password in voor Maps/Search.")
     elif use_serp and not PARTNER_TERMS:
         st.error("Selecteer ten minste één taal of voer een eigen term in voor de Search Scraper.")
     else:
-        if use_related_keywords or domain_for_related_keywords.strip() or not keywords:
-            try:
-                language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
-                suggestion_location = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
-                generated = get_keyword_suggestions(
-                    manual_keywords=manual_keywords if use_related_keywords else [],
-                    domain_seed=domain_for_related_keywords,
-                    limit=related_keywords_limit,
-                    login=dfs_login,
-                    password=dfs_password,
-                    location_name=suggestion_location,
-                    language_name=language_name
-                )
-                related_keywords = [item["keyword"] for item in generated]
-                for item in generated:
-                    keyword_volumes[item["keyword"]] = item.get("search_volume", 0)
-                keywords = list(dict.fromkeys(keywords + related_keywords))
-            except Exception as e:
-                st.error(f"Related keyword generatie mislukt: {e}")
-
-        if not keywords:
-            st.error("Geen bruikbare keywords gevonden. Voeg handmatige keywords toe of gebruik een ander domein.")
-            st.stop()
-
         existing = set()
 
         if uploaded_file is not None:
@@ -854,8 +731,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.stop()
         
         openai_c = OpenAI(api_key=oa_token)
-        if related_keywords:
-            st.info(f"{len(related_keywords)} related keywords toegevoegd voor scraping.")
         
         maps_opportunities = []
         search_opportunities = []
