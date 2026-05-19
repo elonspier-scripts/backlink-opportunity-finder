@@ -194,7 +194,7 @@ with col1:
         maps_location_name = st.text_input(
             "Maps location_name (optioneel)",
             value="Amsterdam, North Holland, Netherlands",
-            help="Gebruik het volledige DataForSEO locatieformaat, bijv. 'London,England,United Kingdom'."
+            help="Wordt toegevoegd aan de keyword query voor lokale intent (zonder apart location_name veld in de API call)."
         )
         maps_language_label = st.selectbox(
             "Maps language_code",
@@ -825,35 +825,16 @@ def fetch_maps_places(keywords, location_name, language_code, depth, se_domain, 
     rows = []
     for keyword in keywords:
         map_keyword = str(keyword).strip()
+        if location_name and location_name.lower() not in map_keyword.lower():
+            map_keyword = f"{map_keyword} {location_name}".strip()
 
-        primary_payload = {
+        payload = {
             "keyword": map_keyword,
             "language_code": language_code,
             "se_domain": se_domain,
             "depth": depth,
         }
-        if location_name.strip():
-            primary_payload["location_name"] = location_name.strip()
-
-        fallback_payload = {
-            "keyword": f"{map_keyword} {location_name}".strip() if location_name.strip() else map_keyword,
-            "language_code": language_code,
-            "se_domain": se_domain,
-            "depth": depth,
-        }
-
-        task_results = None
-        last_error = None
-        for payload in [primary_payload, fallback_payload]:
-            try:
-                task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-
-        if task_results is None:
-            raise RuntimeError(f"Maps request failed for '{map_keyword}': {last_error}")
+        task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
 
         for task in task_results or []:
             task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
