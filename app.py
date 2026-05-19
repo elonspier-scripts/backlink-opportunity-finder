@@ -177,6 +177,7 @@ with st.sidebar.expander("Actieve zoektermen"):
 col1, col2 = st.columns(2)
 maps_location_name = ""
 maps_language_code = "en"
+maps_location_code_input = ""
 
 with col1:
     st.subheader("Stap 1: Keywords")
@@ -188,6 +189,12 @@ with col1:
             "Maps location_name (optioneel)",
             value="Amsterdam, North Holland, Netherlands",
             help="Wordt toegevoegd aan de keyword query voor lokale intent (zonder apart location_name veld in de API call)."
+        )
+        default_maps_location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
+        maps_location_code_input = st.text_input(
+            "Maps location_code (optioneel)",
+            value=str(default_maps_location_code) if default_maps_location_code else "",
+            help="Aanbevolen: gebruik location_code voor stabiele geo-targeting, bijv. 2840 voor United States."
         )
         maps_language_label = st.selectbox(
             "Maps language_code",
@@ -666,7 +673,7 @@ def normalize_maps_website(item):
         return website
     return f"https://{website}"
 
-def fetch_maps_places(keywords, location_name, language_code, depth, se_domain, login, password):
+def fetch_maps_places(keywords, location_name, location_code, language_code, depth, se_domain, login, password):
     rows = []
     for keyword in keywords:
         map_keyword = str(keyword).strip()
@@ -679,6 +686,8 @@ def fetch_maps_places(keywords, location_name, language_code, depth, se_domain, 
             "se_domain": se_domain,
             "depth": depth,
         }
+        if location_code is not None:
+            payload["location_code"] = location_code
         task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
 
         for task in task_results or []:
@@ -705,6 +714,14 @@ if st.button("🚀 Start Analyse", type="primary"):
     manual_keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
     keywords = list(dict.fromkeys(manual_keywords))
     keyword_volumes = {kw: 0 for kw in manual_keywords}
+    maps_location_code = None
+
+    if use_maps and maps_location_code_input.strip():
+        try:
+            maps_location_code = int(maps_location_code_input.strip())
+        except ValueError:
+            st.error("Maps location_code moet een nummer zijn, bijv. 2840.")
+            st.stop()
 
     if not oa_token:
         st.error("Vul OpenAI key in.")
@@ -751,6 +768,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                     maps_items = fetch_maps_places(
                         keywords=maps_keywords,
                         location_name=maps_location_name,
+                        location_code=maps_location_code,
                         language_code=maps_language_code,
                         depth=maps_max_results,
                         se_domain=target_domain,
