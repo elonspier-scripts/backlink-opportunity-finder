@@ -593,7 +593,7 @@ def find_404_outbound_links(page_soup, page_url, max_checks):
 # AANGEPAST: Inclusief 'force_summary' voor Maps
 def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False, check_404=False, max_link_checks=25):
     result_data = {
-        "url": None,
+        "url": home_url,
         "contact_url": "",
         "ai": None,
         "emails": "",
@@ -623,14 +623,10 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
         partner_url = find_partner_url(soup, home_url, search_terms)
         contact_url = find_contact_url(soup, home_url)
         result_data["contact_url"] = contact_url or ""
-        
-        # Geen partner- en geen contactpagina gevonden? Dan stoppen we hier!
-        if not partner_url and not contact_url:
-            return result_data
 
-        analysis_url = partner_url or contact_url
+        analysis_url = partner_url or contact_url or home_url
 
-        page_text_parts = []
+        page_text_parts = [soup.get_text()]
         emails = set(extract_emails_from_soup(soup))
 
         for page_url in [u for u in [partner_url, contact_url] if u]:
@@ -644,9 +640,6 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
                     result_data["brokenLinks"] = find_404_outbound_links(page_soup, page_url, max_link_checks)
             except Exception:
                 continue
-
-        if not page_text_parts:
-            return result_data
 
         # --- STAP 3: Partnerpagina gevonden! AI Samenvatting ophalen als we dat in stap 1 nog niet hadden gedaan (SERP modus) ---
         if not force_summary:
