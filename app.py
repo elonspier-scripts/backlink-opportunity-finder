@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
-import io
 import requests
 import re
 import json
-import numpy as np
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, unquote
 from openai import OpenAI
@@ -114,11 +112,11 @@ st.sidebar.divider()
 st.sidebar.header("📍 Lokale Leads (Google Maps)")
 use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
 maps_max_results = 10
-expand_categories = True
+use_related_keywords = True
 
 if use_maps:
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
-    expand_categories = st.sidebar.checkbox("AI Categorieën Uitbreiding", value=True, help="Laat AI synoniemen verzamelen voor Maps categorieën.")
+    use_related_keywords = st.sidebar.checkbox("Related keywords uitbreiding", value=True, help="Breid input keywords uit met gerelateerde zoekwoorden via DataForSEO.")
     st.sidebar.info("Maps draait via DataForSEO + website contact scraping fallback.")
 
 # --- SEARCH TOGGLE ---
@@ -185,9 +183,8 @@ maps_language_code = "en"
 with col1:
     st.subheader("Stap 1: Keywords")
     keywords_area = st.text_area("Plak keywords (onder elkaar)", height=150, placeholder="Loodgieter\nSchilder")
-    domain_for_suggestions = st.text_input("Website domein voor keyword suggesties (optioneel)", placeholder="voorbeeld.nl")
-    suggestions_limit = st.slider("Max keyword suggesties", 5, 100, 25)
-    include_manual_in_suggestions = st.checkbox("Gebruik handmatige keywords ook als seed", value=True)
+    domain_for_related_keywords = st.text_input("Website domein (optioneel, voor related keywords)", placeholder="voorbeeld.nl")
+    related_keywords_limit = st.slider("Max related keywords", 5, 100, 25)
 
     if use_maps:
         st.markdown("**Maps instellingen**")
@@ -204,26 +201,7 @@ with col1:
         )
         maps_language_code = maps_language_label.split("(")[-1].rstrip(")")
 
-    if "keyword_suggestions" not in st.session_state:
-        st.session_state["keyword_suggestions"] = []
-
-    fetch_suggestions_clicked = st.button("🔎 Haal keyword suggesties op (DataForSEO)")
-
-    suggestion_map = {
-        f"{item['keyword']} (SV: {item['search_volume']})": item
-        for item in st.session_state["keyword_suggestions"]
-    }
-    default_suggestion_labels = list(suggestion_map.keys())[: min(10, len(suggestion_map))]
-    selected_suggestion_labels = st.multiselect(
-        "Selecteer suggesties om toe te voegen",
-        options=list(suggestion_map.keys()),
-        default=default_suggestion_labels
-    )
-    selected_suggestion_keywords = [suggestion_map[label]["keyword"] for label in selected_suggestion_labels]
-    selected_suggestion_volumes = {
-        suggestion_map[label]["keyword"]: suggestion_map[label]["search_volume"]
-        for label in selected_suggestion_labels
-    }
+    st.caption("De analyse gebruikt je input keywords en kan deze automatisch uitbreiden met related keywords.")
 
 with col2:
     st.subheader("Stap 2: Uitsluitingen (Optioneel)")
@@ -232,21 +210,6 @@ with col2:
 # ========================================================
 # 3. LOGICA FUNCTIES
 # ========================================================
-@st.cache_data
-def load_category_database():
-    file_name = "categories_embeddings.pkl.gz"
-    try:
-        return pd.read_pickle(file_name)
-    except OSError:
-        try:
-            return pd.read_pickle(file_name, compression=None)
-        except Exception as e:
-            st.error(f"Fout bij laden (onverpakt): {e}")
-            return None
-    except Exception as e:
-        st.error(f"Algemene fout bij laden: {e}")
-        return None
-
 def extract_domain(val):
     val = str(val).lower().strip()
     if '://' in val: 
@@ -553,31 +516,6 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
     except:
         return result_data
 
-def get_maps_categories(keyword, ai_client):
-    df_cats = load_category_database()
-    
-    if df_cats is None:
-        return [keyword]
-
-    try:
-        response = ai_client.embeddings.create(
-            input=[keyword],
-            model="text-embedding-3-small",
-            dimensions=512
-        )
-        query_vector = np.array(response.data[0].embedding, dtype=np.float32)
-
-        all_vectors = np.vstack(df_cats['Embedding_Vector'].values)
-        scores = np.dot(all_vectors, query_vector)
-
-        top_indices = np.argsort(scores)[-20:][::-1]
-        relevant_categories = df_cats.iloc[top_indices]['Categorie_Naam'].tolist()
-
-        return relevant_categories
-    except Exception as e:
-        st.error(f"Fout bij semantisch zoeken naar categorieën: {e}")
-        return [keyword]
-
 def dataforseo_post(endpoint, tasks, login, password):
     safe_login = (login or "").strip()
     safe_password = (password or "").strip()
@@ -856,81 +794,51 @@ def fetch_maps_places(keywords, location_name, language_code, depth, se_domain, 
 # ========================================================
 # 4. RUNNER
 # ========================================================
-if fetch_suggestions_clicked:
-    manual_keywords_for_suggestions = [k.strip() for k in keywords_area.split('\n') if k.strip()]
-    if not dfs_login or not dfs_password:
-        st.error("Vul DataForSEO login en password in om suggesties op te halen.")
-    elif not domain_for_suggestions.strip() and (not include_manual_in_suggestions or not manual_keywords_for_suggestions):
-        st.error("Vul een domein in of voeg handmatige keywords toe als seed.")
-    else:
-        try:
-            language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
-            suggestion_location = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
-            st.session_state["keyword_suggestions"] = get_keyword_suggestions(
-                manual_keywords=manual_keywords_for_suggestions if include_manual_in_suggestions else [],
-                domain_seed=domain_for_suggestions,
-                limit=suggestions_limit,
-                login=dfs_login,
-                password=dfs_password,
-                location_name=suggestion_location,
-                language_name=language_name
-            )
-            if st.session_state["keyword_suggestions"]:
-                st.success(f"{len(st.session_state['keyword_suggestions'])} keyword suggesties geladen.")
-            else:
-                st.warning("Geen keyword suggesties gevonden voor deze input/combinatie. Probeer een ander domein of bredere seed keyword.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Keyword suggesties ophalen mislukt: {e}")
-
 if st.button("🚀 Start Analyse", type="primary"):
     manual_keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
-    selected_keywords = list(dict.fromkeys(manual_keywords + selected_suggestion_keywords))
-    keyword_volumes = selected_suggestion_volumes.copy()
-    for kw in manual_keywords:
-        keyword_volumes.setdefault(kw, 0)
-
-    auto_generated_keywords = []
-    if not selected_keywords and use_maps and domain_for_suggestions.strip() and dfs_login and dfs_password:
-        try:
-            language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
-            suggestion_location = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
-            generated = get_keyword_suggestions(
-                manual_keywords=[],
-                domain_seed=domain_for_suggestions,
-                limit=suggestions_limit,
-                login=dfs_login,
-                password=dfs_password,
-                location_name=suggestion_location,
-                language_name=language_name
-            )
-            auto_generated_keywords = [item["keyword"] for item in generated]
-            for item in generated:
-                keyword_volumes[item["keyword"]] = item.get("search_volume", 0)
-        except Exception as e:
-            st.error(f"Automatische keyword generatie voor Maps mislukt: {e}")
-
-    keywords = list(dict.fromkeys(selected_keywords + auto_generated_keywords))
+    keywords = list(dict.fromkeys(manual_keywords))
+    keyword_volumes = {kw: 0 for kw in manual_keywords}
+    related_keywords = []
 
     if not oa_token:
         st.error("Vul OpenAI key in.")
-    elif not keywords:
-        if use_maps and domain_for_suggestions.strip():
-            st.error("Geen keywords gevonden. Probeer een ander domein of voeg handmatige keywords toe.")
-        else:
-            st.error("Voeg minimaal 1 keyword toe (handmatig, suggesties, of domein voor Maps generatie).")
+    elif not keywords and not domain_for_related_keywords.strip():
+        st.error("Voeg minimaal 1 keyword toe in het keyword veld of vul een domein in.")
     elif not use_maps and not use_serp:
         st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
     elif (
         use_serp
-        or selected_suggestion_keywords
-        or domain_for_suggestions.strip()
+        or domain_for_related_keywords.strip()
         or use_maps
     ) and (not dfs_login or not dfs_password):
-        st.error("Vul DataForSEO login + password in voor Maps/Search en keyword suggesties.")
+        st.error("Vul DataForSEO login + password in voor Maps/Search en related keywords.")
     elif use_serp and not PARTNER_TERMS:
         st.error("Selecteer ten minste één taal of voer een eigen term in voor de Search Scraper.")
     else:
+        if use_related_keywords or domain_for_related_keywords.strip() or not keywords:
+            try:
+                language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
+                suggestion_location = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+                generated = get_keyword_suggestions(
+                    manual_keywords=manual_keywords if use_related_keywords else [],
+                    domain_seed=domain_for_related_keywords,
+                    limit=related_keywords_limit,
+                    login=dfs_login,
+                    password=dfs_password,
+                    location_name=suggestion_location,
+                    language_name=language_name
+                )
+                related_keywords = [item["keyword"] for item in generated]
+                for item in generated:
+                    keyword_volumes[item["keyword"]] = item.get("search_volume", 0)
+                keywords = list(dict.fromkeys(keywords + related_keywords))
+            except Exception as e:
+                st.error(f"Related keyword generatie mislukt: {e}")
+
+        if not keywords:
+            st.error("Geen bruikbare keywords gevonden. Voeg handmatige keywords toe of gebruik een ander domein.")
+            st.stop()
+
         existing = set()
 
         if uploaded_file is not None:
@@ -946,8 +854,8 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.stop()
         
         openai_c = OpenAI(api_key=oa_token)
-        if auto_generated_keywords:
-            st.info(f"{len(auto_generated_keywords)} keywords automatisch gegenereerd via domein voor Maps.")
+        if related_keywords:
+            st.info(f"{len(related_keywords)} related keywords toegevoegd voor scraping.")
         
         maps_opportunities = []
         search_opportunities = []
@@ -959,21 +867,11 @@ if st.button("🚀 Start Analyse", type="primary"):
             # ---------------------------------------------------------
             if use_maps:
                 st.write("📍 Google Maps Scraper (DataForSEO) is gestart...")
-                
-                all_categories = []
-                if expand_categories:
-                    st.write("🧠 AI is Maps-categorieën aan het verzamelen...")
-                    for kw in keywords:
-                        cats = get_maps_categories(kw, openai_c)
-                        all_categories.extend(cats)
-                    all_categories = list(set(all_categories))
-                    st.write(f"🔍 {len(all_categories)} categorie-filters toegepast.")
 
                 location_label = maps_location_name if maps_location_name else "zonder location_name"
                 st.write(f"🗺️ Maps zoeken met location_name: {location_label}...")
                 try:
-                    maps_keywords = keywords + all_categories if expand_categories and all_categories else keywords
-                    maps_keywords = list(dict.fromkeys([k for k in maps_keywords if str(k).strip()]))
+                    maps_keywords = list(dict.fromkeys([k for k in keywords if str(k).strip()]))
                     maps_items = fetch_maps_places(
                         keywords=maps_keywords,
                         location_name=maps_location_name,
