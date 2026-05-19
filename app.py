@@ -226,7 +226,6 @@ with st.sidebar.expander("Actieve zoektermen"):
 # 2. INPUT SECTIE (HOOFDSCHERM)
 # ========================================================
 col1, col2 = st.columns(2)
-maps_location_name = ""
 maps_language_code = "en"
 maps_location_code_input = ""
 maps_location_code_selected = None
@@ -237,11 +236,6 @@ with col1:
 
     if use_maps:
         st.markdown("**Maps instellingen**")
-        maps_location_name = st.text_input(
-            "Maps location_name (optioneel)",
-            value="Amsterdam, North Holland, Netherlands",
-            help="Wordt toegevoegd aan de keyword query voor lokale intent (zonder apart location_name veld in de API call)."
-        )
         default_maps_location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
         maps_location_code_input = st.text_input(
             "Maps location_code (optioneel)",
@@ -249,9 +243,9 @@ with col1:
             help="Aanbevolen: gebruik location_code voor stabiele geo-targeting, bijv. 2840 voor United States."
         )
         maps_location_lookup_query = st.text_input(
-            "Zoek stad/regio voor location_code",
+            "Adres/stad voor location_code",
             placeholder="Amsterdam",
-            help="Zoekt officiële Google location_codes via DataForSEO."
+            help="Vul adres of stad in; kies daarna een match om de juiste location_code te gebruiken."
         )
 
         if "maps_location_matches" not in st.session_state:
@@ -761,12 +755,10 @@ def normalize_maps_website(item):
         return website
     return f"https://{website}"
 
-def fetch_maps_places(keywords, location_name, location_code, language_code, depth, se_domain, login, password):
+def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, login, password):
     rows = []
     for keyword in keywords:
         map_keyword = str(keyword).strip()
-        if location_name and location_name.lower() not in map_keyword.lower():
-            map_keyword = f"{map_keyword} {location_name}".strip()
 
         payload = {
             "keyword": map_keyword,
@@ -848,14 +840,11 @@ if st.button("🚀 Start Analyse", type="primary"):
             # ---------------------------------------------------------
             if use_maps:
                 st.write("📍 Google Maps Scraper (DataForSEO) is gestart...")
-
-                location_label = maps_location_name if maps_location_name else "zonder location_name"
-                st.write(f"🗺️ Maps zoeken met location_name: {location_label}...")
+                st.write(f"🗺️ Maps zoeken met location_code: {maps_location_code if maps_location_code is not None else 'niet ingesteld'}...")
                 try:
                     maps_keywords = list(dict.fromkeys([k for k in keywords if str(k).strip()]))
                     maps_items = fetch_maps_places(
                         keywords=maps_keywords,
-                        location_name=maps_location_name,
                         location_code=maps_location_code,
                         language_code=maps_language_code,
                         depth=maps_max_results,
