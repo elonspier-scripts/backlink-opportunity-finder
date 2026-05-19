@@ -227,7 +227,6 @@ with st.sidebar.expander("Actieve zoektermen"):
 # ========================================================
 col1, col2 = st.columns(2)
 maps_language_code = "en"
-maps_location_code_input = ""
 maps_location_code_selected = None
 
 with col1:
@@ -237,11 +236,7 @@ with col1:
     if use_maps:
         st.markdown("**Maps instellingen**")
         default_maps_location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
-        maps_location_code_input = st.text_input(
-            "Maps location_code (optioneel)",
-            value=str(default_maps_location_code) if default_maps_location_code else "",
-            help="Aanbevolen: gebruik location_code voor stabiele geo-targeting, bijv. 2840 voor United States."
-        )
+        maps_location_code_selected = default_maps_location_code
         maps_location_lookup_query = st.text_input(
             "Adres/stad voor location_code",
             placeholder="Amsterdam",
@@ -277,7 +272,7 @@ with col1:
                 options=list(location_option_map.keys())
             )
             maps_location_code_selected = location_option_map[selected_location_label]
-            st.caption(f"Geselecteerde location_code: {maps_location_code_selected}")
+        st.caption(f"Actieve location_code: {maps_location_code_selected if maps_location_code_selected is not None else 'geen'}")
         maps_language_label = st.selectbox(
             "Maps language_code",
             options=[f"{label} ({code})" for label, code in MAPS_LANGUAGE_CODE_BY_LABEL.items()],
@@ -795,13 +790,6 @@ if st.button("🚀 Start Analyse", type="primary"):
     keywords = list(dict.fromkeys(manual_keywords))
     keyword_volumes = {kw: 0 for kw in manual_keywords}
     maps_location_code = maps_location_code_selected
-
-    if use_maps and maps_location_code is None and maps_location_code_input.strip():
-        try:
-            maps_location_code = int(maps_location_code_input.strip())
-        except ValueError:
-            st.error("Maps location_code moet een nummer zijn, bijv. 2840.")
-            st.stop()
 
     if not oa_token:
         st.error("Vul OpenAI key in.")
