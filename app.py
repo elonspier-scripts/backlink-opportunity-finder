@@ -643,17 +643,16 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
             except:
                 pass 
 
-        # --- STAP 2: Zoek naar partner- en contactpagina ---
-        partner_url = find_partner_url(soup, home_url, search_terms)
+        # --- STAP 2: Scrape zonder partnerpagina-filter ---
         contact_url = find_contact_url(soup, home_url)
         result_data["contact_url"] = contact_url or ""
 
-        analysis_url = partner_url or contact_url or home_url
+        analysis_url = contact_url or home_url
 
         page_text_parts = [soup.get_text()]
         emails = set(extract_emails_from_soup(soup))
 
-        for page_url in [u for u in [partner_url, contact_url] if u]:
+        for page_url in [u for u in [contact_url] if u]:
             try:
                 res_page = HTTP_SESSION.get(page_url, timeout=10, headers=REQUEST_HEADERS)
                 res_page.raise_for_status()
@@ -665,7 +664,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
             except Exception:
                 continue
 
-        # --- STAP 3: Partnerpagina gevonden! AI Samenvatting ophalen als we dat in stap 1 nog niet hadden gedaan (SERP modus) ---
+        # --- STAP 3: AI samenvatting ophalen (SERP modus) ---
         if not force_summary:
             try:
                 home_text = soup.get_text(separator=' ', strip=True)[:1500]
@@ -677,7 +676,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
             except:
                 pass 
 
-        # --- STAP 4: Partnerpagina uitlezen en analyseren met AI ---
+        # --- STAP 4: Website/contact tekst analyseren met AI ---
         combined_text = "\n\n".join(page_text_parts)
         ai_res = ai_analyze(combined_text, analysis_url, ai_client)
 
@@ -908,8 +907,6 @@ if st.button("🚀 Start Analyse", type="primary"):
         st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
     elif (use_serp or use_maps) and (not dfs_login or not dfs_password):
         st.error("Vul DataForSEO login + password in voor Maps/Search.")
-    elif use_serp and not PARTNER_TERMS:
-        st.error("Selecteer ten minste één taal of voer een eigen term in voor de Search Scraper.")
     else:
         existing = set()
 
@@ -1019,7 +1016,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                         password=dfs_password
                     )
                     
-                    st.write("🔎 Search Domeinen filteren en scannen op partnerpagina's...")
+                    st.write("🔎 Search domeinen scannen en analyseren...")
                     for result in organic_results:
                         kw = result.get('keyword') or "Onbekend"
                         url = result.get('url')
@@ -1085,11 +1082,11 @@ if st.button("🚀 Start Analyse", type="primary"):
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
                     df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
-                    st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
+                    st.success(f"{len(df_search)} Search leads gevonden!")
                     st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
                 else:
-                    st.warning("Geen partnerpagina's gevonden via Google Search.")
+                    st.warning("Geen Search leads gevonden via Google Search.")
         
         # Als ALLEEN Maps aan staat
         elif use_maps and not use_serp:
@@ -1112,8 +1109,8 @@ if st.button("🚀 Start Analyse", type="primary"):
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
                 df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
-                st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
+                st.success(f"{len(df_search)} Search leads gevonden!")
                 st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
             else:
-                st.warning("Geen partnerpagina's gevonden via Google Search.")
+                st.warning("Geen Search leads gevonden via Google Search.")
