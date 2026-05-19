@@ -376,6 +376,61 @@ def find_partner_url(soup, home_url, search_terms):
 
     return None
 
+def find_contact_url(soup, home_url):
+    contact_tokens = [
+        "contact",
+        "contact-us",
+        "contacten",
+        "about",
+        "over-ons",
+        "impressum",
+        "kontakt"
+    ]
+    seen_hrefs = set()
+
+    priority_selectors = [
+        'footer',
+        'nav',
+        '[role="navigation"]',
+        '[id*="footer" i]',
+        '[class*="footer" i]',
+        '[id*="menu" i]',
+        '[class*="menu" i]',
+        '[id*="nav" i]',
+        '[class*="nav" i]'
+    ]
+
+    for selector in priority_selectors:
+        for container in soup.select(selector):
+            for link in container.find_all('a', href=True):
+                href = (link.get('href') or '').strip()
+                if not href or href in seen_hrefs:
+                    continue
+                seen_hrefs.add(href)
+                href_l = href.lower()
+                if any(token in href_l for token in contact_tokens):
+                    return urljoin(home_url, href)
+
+    for link in soup.find_all('a', href=True):
+        href = (link.get('href') or '').strip()
+        if not href or href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
+        href_l = href.lower()
+        if any(token in href_l for token in contact_tokens):
+            return urljoin(home_url, href)
+
+    for path in ["/contact", "/contact-us", "/contacten", "/about", "/over-ons", "/impressum", "/kontakt"]:
+        candidate = urljoin(home_url, path)
+        try:
+            candidate_response = HTTP_SESSION.get(candidate, timeout=8, headers=REQUEST_HEADERS)
+            if candidate_response.status_code < 400:
+                return candidate
+        except Exception:
+            continue
+
+    return None
+
 def deobfuscate_email_text(text):
     if not text:
         return ""
@@ -539,6 +594,7 @@ def find_404_outbound_links(page_soup, page_url, max_checks):
 def process_site(home_url, ai_client, search_terms, target_keyword, force_summary=False, check_404=False, max_link_checks=25):
     result_data = {
         "url": None,
+        "contact_url": "",
         "ai": None,
         "emails": "",
         "Omschrijving": "Geen beschrijving",
@@ -563,11 +619,33 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
             except:
                 pass 
 
-        # --- STAP 2: Zoek naar partnerpagina (Gratis HTML check) ---
+        # --- STAP 2: Zoek naar partner- en contactpagina ---
         partner_url = find_partner_url(soup, home_url, search_terms)
+        contact_url = find_contact_url(soup, home_url)
+        result_data["contact_url"] = contact_url or ""
         
-        # Geen partnerpagina gevonden? Dan stoppen we hier! (Als force_summary aanstond heb je nu wel al de omschrijving)
-        if not partner_url: 
+        # Geen partner- en geen contactpagina gevonden? Dan stoppen we hier!
+        if not partner_url and not contact_url:
+            return result_data
+
+        analysis_url = partner_url or contact_url
+
+        page_text_parts = []
+        emails = set(extract_emails_from_soup(soup))
+
+        for page_url in [u for u in [partner_url, contact_url] if u]:
+            try:
+                res_page = HTTP_SESSION.get(page_url, timeout=10, headers=REQUEST_HEADERS)
+                res_page.raise_for_status()
+                page_soup = BeautifulSoup(res_page.text, 'html.parser')
+                page_text_parts.append(page_soup.get_text())
+                emails.update(extract_emails_from_soup(page_soup))
+                if check_404 and page_url == analysis_url:
+                    result_data["brokenLinks"] = find_404_outbound_links(page_soup, page_url, max_link_checks)
+            except Exception:
+                continue
+
+        if not page_text_parts:
             return result_data
 
         # --- STAP 3: Partnerpagina gevonden! AI Samenvatting ophalen als we dat in stap 1 nog niet hadden gedaan (SERP modus) ---
@@ -583,20 +661,12 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
                 pass 
 
         # --- STAP 4: Partnerpagina uitlezen en analyseren met AI ---
-        res_p = HTTP_SESSION.get(partner_url, timeout=10, headers=REQUEST_HEADERS)
-        res_p.raise_for_status()
-        p_soup = BeautifulSoup(res_p.text, 'html.parser')
-        p_text = p_soup.get_text()
-        emails = extract_emails_from_soup(p_soup)
-        if not emails:
-            emails = extract_emails_from_soup(soup)
-        ai_res = ai_analyze(p_text, partner_url, ai_client)
-        if check_404:
-            result_data["brokenLinks"] = find_404_outbound_links(p_soup, partner_url, max_link_checks)
+        combined_text = "\n\n".join(page_text_parts)
+        ai_res = ai_analyze(combined_text, analysis_url, ai_client)
 
-        result_data["url"] = partner_url
+        result_data["url"] = analysis_url
         result_data["ai"] = ai_res
-        result_data["emails"] = ", ".join(emails[:3])
+        result_data["emails"] = ", ".join(sorted(emails)[:3])
         
         return result_data
     except:
@@ -963,6 +1033,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     "Emails": analysis['emails'],
                                     "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
                                     "Partner URL": analysis['url'],
+                                    "Contact URL": analysis.get('contact_url', ''),
                                     "Score Linkbuilding": analysis['ai'],
                                     "Broken Outbound Links": json.dumps(analysis['brokenLinks']) if analysis['brokenLinks'] else "no links found"
                                 })
@@ -995,7 +1066,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab2:
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
-                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
                     st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                     st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
@@ -1022,7 +1093,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📡 Google Search Resultaten")
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
-                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
                 st.success(f"{len(df_search)} Partnerpagina's gevonden via Search!")
                 st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
