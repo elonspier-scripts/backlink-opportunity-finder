@@ -234,6 +234,7 @@ with st.sidebar.expander("Actieve zoektermen"):
 col1, col2 = st.columns(2)
 maps_language_code = "en"
 maps_location_code_selected = None
+search_location_code_selected = None
 
 with col1:
     st.subheader("Stap 1: Keywords")
@@ -286,6 +287,49 @@ with col1:
             help="DataForSEO Maps verwacht language_code (bijv. en, nl, de)."
         )
         maps_language_code = maps_language_label.split("(")[-1].rstrip(")")
+
+    if use_serp:
+        st.markdown("**Search instellingen**")
+        search_location_lookup_query = st.text_input(
+            "Land/stad voor Search location_code",
+            placeholder="Netherlands",
+            help="Optioneel: kies een location_code voor de Google Search webscraper.",
+            key="search_location_lookup_query"
+        )
+
+        if "search_location_matches" not in st.session_state:
+            st.session_state["search_location_matches"] = []
+
+        if st.button("Zoek Search location_code", disabled=not search_location_lookup_query.strip(), key="search_location_lookup_button"):
+            if not dfs_login or not dfs_password:
+                st.error("Vul DataForSEO login/password in om Search location codes op te zoeken.")
+            else:
+                try:
+                    st.session_state["search_location_matches"] = search_google_locations(
+                        login=dfs_login,
+                        password=dfs_password,
+                        query=search_location_lookup_query,
+                        limit=20,
+                    )
+                    if not st.session_state["search_location_matches"]:
+                        st.warning("Geen Search locaties gevonden voor deze zoekterm.")
+                except Exception as e:
+                    st.error(f"Search location lookup mislukt: {e}")
+
+        if st.session_state["search_location_matches"]:
+            search_location_option_map = {
+                f"{item['location_name']} | code {item['location_code']}": item["location_code"]
+                for item in st.session_state["search_location_matches"]
+            }
+            selected_search_location_label = st.selectbox(
+                "Kies Search locatie",
+                options=list(search_location_option_map.keys()),
+                key="search_location_select"
+            )
+            search_location_code_selected = search_location_option_map[selected_search_location_label]
+        st.caption(
+            f"Actieve Search location_code: {search_location_code_selected if search_location_code_selected is not None else 'geen (standaard zonder location_code)'}"
+        )
 
     st.caption("De analyse gebruikt alleen de keywords uit het input veld.")
 
@@ -805,9 +849,8 @@ def enrich_contacts_from_website(home_url):
         return enriched
     return enriched
 
-def get_dataforseo_organic_results(keywords, target_domain, pages, login, password):
+def get_dataforseo_organic_results(keywords, target_domain, pages, login, password, location_code=None):
     language_code = DATAFORSEO_LANGUAGE_CODE_BY_DOMAIN.get(target_domain, "en")
-    location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
     organic_rows = []
     for keyword in keywords:
         payload = {
@@ -1013,7 +1056,8 @@ if st.button("🚀 Start Analyse", type="primary"):
                         target_domain=target_domain,
                         pages=pages,
                         login=dfs_login,
-                        password=dfs_password
+                        password=dfs_password,
+                        location_code=search_location_code_selected
                     )
                     
                     st.write("🔎 Search domeinen scannen en analyseren...")
