@@ -697,9 +697,7 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
 
     if domain_seed.strip():
         domain_task = [{
-            "target": extract_domain(domain_seed),
-            "location_name": location_name,
-            "language_name": language_name
+            "target": extract_domain(domain_seed)
         }]
         domain_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_site/live", domain_task, login, password)
         collect_items(domain_tasks)
@@ -707,13 +705,14 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
     if manual_keywords:
         for manual_keyword in manual_keywords:
             keyword_task = [{
-                "keywords": [manual_keyword],
-                "location_name": location_name,
-                "language_name": language_name,
-                "include_seed_keyword": True
+                "keywords": [manual_keyword]
             }]
             keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
             collect_items(keyword_tasks)
+
+        for manual_keyword in manual_keywords:
+            if manual_keyword and manual_keyword not in suggestions:
+                suggestions[manual_keyword] = 0
 
     rows = [{"keyword": kw, "search_volume": volume} for kw, volume in suggestions.items()]
     if not rows and task_errors:
