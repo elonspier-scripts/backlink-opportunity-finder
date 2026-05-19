@@ -10,19 +10,19 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 DATAFORSEO_BASE_URL = "https://api.dataforseo.com/v3"
-DATAFORSEO_LANGUAGE_BY_DOMAIN = {
-    "google.nl": "Dutch",
-    "google.be": "Dutch",
-    "google.com": "English",
-    "google.de": "German",
-    "google.fr": "French"
+DATAFORSEO_LOCATION_CODE_BY_DOMAIN = {
+    "google.nl": 1528,
+    "google.be": 1056,
+    "google.com": 2840,
+    "google.de": 1276,
+    "google.fr": 2250,
 }
-DATAFORSEO_LOCATION_BY_DOMAIN = {
-    "google.nl": "Netherlands",
-    "google.be": "Belgium",
-    "google.com": "United States",
-    "google.de": "Germany",
-    "google.fr": "France"
+DATAFORSEO_LANGUAGE_CODE_BY_DOMAIN = {
+    "google.nl": "nl",
+    "google.be": "nl",
+    "google.com": "en",
+    "google.de": "de",
+    "google.fr": "fr",
 }
 MAPS_LANGUAGE_CODE_BY_LABEL = {
     "Dutch": "nl",
@@ -628,18 +628,19 @@ def enrich_contacts_from_website(home_url):
     return enriched
 
 def get_dataforseo_organic_results(keywords, target_domain, pages, login, password):
-    language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
-    location_name = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+    language_code = DATAFORSEO_LANGUAGE_CODE_BY_DOMAIN.get(target_domain, "en")
+    location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
     organic_rows = []
     for keyword in keywords:
-        task_payload = [{
+        payload = {
             "keyword": keyword,
             "se_domain": target_domain,
-            "location_name": location_name,
-            "language_name": language_name,
+            "language_code": language_code,
             "depth": pages * 10
-        }]
-        task_results = dataforseo_post("/serp/google/organic/live/advanced", task_payload, login, password)
+        }
+        if location_code:
+            payload["location_code"] = location_code
+        task_results = dataforseo_post("/serp/google/organic/live/advanced", [payload], login, password)
         for task in task_results or []:
             task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
             for result in (task or {}).get("result") or []:
