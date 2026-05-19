@@ -26,13 +26,6 @@ DATAFORSEO_LOCATION_BY_DOMAIN = {
     "google.de": "Germany",
     "google.fr": "France"
 }
-DATAFORSEO_LOCATION_CODE_BY_DOMAIN = {
-    "google.nl": 1528,
-    "google.be": 1056,
-    "google.com": 2840,
-    "google.de": 1276,
-    "google.fr": 1250,
-}
 PHONE_REGEX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{0,4}")
 
 # ========================================================
@@ -807,34 +800,18 @@ def normalize_maps_website(item):
 
 def fetch_maps_places(keywords, location_name, language_name, depth, se_domain, login, password):
     rows = []
-    location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(se_domain)
     for keyword in keywords:
         map_keyword = str(keyword).strip()
         if location_name and location_name.lower() not in map_keyword.lower():
             map_keyword = f"{map_keyword} {location_name}".strip()
 
-        primary_payload = {
+        payload = {
             "keyword": map_keyword,
             "language_name": language_name,
             "se_domain": se_domain,
             "depth": depth,
         }
-        if location_code:
-            primary_payload["location_code"] = location_code
-
-        payload_variants = [primary_payload, {k: v for k, v in primary_payload.items() if k != "location_code"}]
-        task_results = None
-        last_error = None
-        for payload in payload_variants:
-            try:
-                task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-
-        if task_results is None:
-            raise RuntimeError(f"Maps request failed for '{map_keyword}': {last_error}")
+        task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
 
         for task in task_results or []:
             task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
