@@ -26,6 +26,13 @@ DATAFORSEO_LOCATION_BY_DOMAIN = {
     "google.de": "Germany",
     "google.fr": "France"
 }
+DATAFORSEO_LOCATION_CODE_BY_DOMAIN = {
+    "google.nl": 1528,
+    "google.be": 1056,
+    "google.com": 2840,
+    "google.de": 1276,
+    "google.fr": 1250
+}
 PHONE_REGEX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{0,4}")
 
 # ========================================================
@@ -695,12 +702,55 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
                         search_volume = 0
                     suggestions[keyword] = max(search_volume, suggestions.get(keyword, 0))
 
+    def collect_ranked_items(tasks_payload):
+        for task in tasks_payload or []:
+            task_status = (task or {}).get("status_code")
+            if task_status and task_status != 20000:
+                task_errors.append((task or {}).get("status_message", "Onbekende DataForSEO task fout"))
+            for result in (task or {}).get("result") or []:
+                for item in (result or {}).get("items") or []:
+                    keyword_data = (item.get("keyword_data") or {})
+                    keyword = (item.get("keyword") or keyword_data.get("keyword") or "").strip()
+                    if not keyword:
+                        continue
+
+                    keyword_info = (keyword_data.get("keyword_info") or {})
+                    search_volume = item.get("search_volume")
+                    if search_volume is None:
+                        search_volume = keyword_info.get("search_volume")
+                    if search_volume is None:
+                        search_volume = 0
+                    suggestions[keyword] = max(search_volume, suggestions.get(keyword, 0))
+
     if domain_seed.strip():
-        domain_task = [{
-            "target": extract_domain(domain_seed)
-        }]
-        domain_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_site/live", domain_task, login, password)
-        collect_items(domain_tasks)
+        ranked_endpoint = "/dataforseo_labs/google/ranked_keywords/live"
+        domain_target = extract_domain(domain_seed)
+        location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
+        primary_payload = {
+            "target": domain_target,
+            "language_name": language_name,
+            "limit": max(limit, 100)
+        }
+        if location_code:
+            primary_payload["location_code"] = location_code
+
+        ranked_payload_variants = [
+            primary_payload,
+            {"target": domain_target},
+        ]
+
+        ranked_error = None
+        for payload in ranked_payload_variants:
+            try:
+                ranked_tasks = dataforseo_post(ranked_endpoint, [payload], login, password)
+                collect_ranked_items(ranked_tasks)
+                ranked_error = None
+                break
+            except Exception as e:
+                ranked_error = e
+
+        if ranked_error and not suggestions:
+            task_errors.append(str(ranked_error))
 
     if manual_keywords:
         for manual_keyword in manual_keywords:
