@@ -163,10 +163,16 @@ st.sidebar.divider()
 st.sidebar.header("📍 Lokale Leads (Google Maps)")
 use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
 maps_max_results = 10
+maps_enable_contact_fallback = False
 
 if use_maps:
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
-    st.sidebar.info("Maps draait via DataForSEO + website contact scraping fallback.")
+    maps_enable_contact_fallback = st.sidebar.toggle(
+        "Enable website contact fallback",
+        value=False,
+        help="When enabled, enrich missing contact URL, email, and social links from the website."
+    )
+    st.sidebar.info("Maps runs on DataForSEO. Contact fallback is optional.")
 
 # --- SEARCH TOGGLE ---
 st.sidebar.divider()
@@ -665,7 +671,7 @@ def extract_phone_candidates_from_soup(soup):
     return sorted(phones)
 
 def enrich_contacts_from_website(home_url):
-    enriched = {"emails": [], "phones": [], "social_links": []}
+    enriched = {"emails": [], "phones": [], "social_links": [], "contact_url": ""}
     try:
         response = HTTP_SESSION.get(home_url, timeout=10, headers=REQUEST_HEADERS)
         response.raise_for_status()
@@ -697,6 +703,8 @@ def enrich_contacts_from_website(home_url):
             try:
                 contact_response = HTTP_SESSION.get(url, timeout=8, headers=REQUEST_HEADERS)
                 contact_response.raise_for_status()
+                if not enriched["contact_url"]:
+                    enriched["contact_url"] = url
                 contact_soup = BeautifulSoup(contact_response.text, 'html.parser')
                 emails.update(extract_emails_from_soup(contact_soup))
                 phones.update(extract_phone_candidates_from_soup(contact_soup))
@@ -870,20 +878,41 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 maps_kw = item.get('searchString') or item.get('searchQuery') or (keywords[0] if keywords else 'Onbekend')
                                 final_emails = maps_emails
                                 final_phone = maps_phone if maps_phone else "N/A"
+                                final_social_links = sorted(set(maps_social_links or []))
+                                final_contact_url = item.get('contactUrl', '')
 
-                                maps_opportunities.append({
+                                if maps_enable_contact_fallback and website:
+                                    needs_fallback = not final_contact_url or not final_emails or not final_social_links
+                                    if needs_fallback:
+                                        fallback_contacts = enrich_contacts_from_website(website)
+                                        if not final_contact_url:
+                                            final_contact_url = fallback_contacts.get("contact_url", "")
+                                        if not final_emails:
+                                            final_emails = fallback_contacts.get("emails", [])
+                                        if not maps_phone:
+                                            fallback_phones = fallback_contacts.get("phones", [])
+                                            if fallback_phones:
+                                                final_phone = fallback_phones[0]
+                                        fallback_social = fallback_contacts.get("social_links", [])
+                                        if fallback_social:
+                                            final_social_links = sorted(set(final_social_links + fallback_social))
+
+                                maps_row = {
                                     "Company": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                    "Summary": item.get('summary') or "No description",
                                     "Category": item.get('categoryName', 'Unknown'),
                                     "Keyword": maps_kw,
                                     "Domain": dom,
                                     "Shared URL": item.get('sharedUrl', ''),
-                                    "Contact URL": item.get('contactUrl', ''),
+                                    "Contact URL": final_contact_url,
                                     "Address": item.get('address', ''),
                                     "Phone": final_phone,
                                     "Emails": ", ".join(final_emails) if final_emails else "",
-                                    "Social Links": ", ".join(sorted(set(maps_social_links or [])))
-                                })
+                                    "Social Links": ", ".join(final_social_links)
+                                }
+                                if maps_enable_contact_fallback:
+                                    maps_row["Summary"] = item.get('summary') or "No description"
+
+                                maps_opportunities.append(maps_row)
                                 existing.add(dom)
                 except Exception as e:
                     st.error(f"Google Maps call mislukt (DataForSEO): {e}")
@@ -953,7 +982,10 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    df_maps = df_maps[["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]]
+                    maps_columns = ["Company", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]
+                    if maps_enable_contact_fallback:
+                        maps_columns.insert(1, "Summary")
+                    df_maps = df_maps[maps_columns]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(df_maps, use_container_width=True)
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
@@ -975,7 +1007,10 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                df_maps = df_maps[["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]]
+                maps_columns = ["Company", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]
+                if maps_enable_contact_fallback:
+                    maps_columns.insert(1, "Summary")
+                df_maps = df_maps[maps_columns]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(df_maps, use_container_width=True)
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
