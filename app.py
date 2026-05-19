@@ -34,6 +34,57 @@ MAPS_LANGUAGE_CODE_BY_LABEL = {
 }
 PHONE_REGEX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{0,4}")
 
+def search_google_locations(login, password, query, limit=20):
+    safe_login = (login or "").strip()
+    safe_password = (password or "").strip()
+    if not safe_login or not safe_password:
+        raise RuntimeError("Vul DataForSEO login/password in om locaties op te zoeken.")
+
+    response = requests.get(
+        f"{DATAFORSEO_BASE_URL}/serp/google/locations",
+        auth=(safe_login, safe_password),
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status_code") != 20000:
+        raise RuntimeError(payload.get("status_message", "Locations request failed"))
+
+    query_lc = (query or "").strip().lower()
+    matches = []
+    for task in payload.get("tasks") or []:
+        for item in (task or {}).get("result") or []:
+            location_name = (item.get("location_name") or "").strip()
+            location_code = item.get("location_code")
+            if not location_name or location_code is None:
+                continue
+            if query_lc and query_lc not in location_name.lower():
+                continue
+            matches.append({
+                "location_name": location_name,
+                "location_code": int(location_code),
+            })
+
+    matches = sorted(
+        matches,
+        key=lambda x: (
+            0 if x["location_name"].lower().startswith(query_lc) else 1,
+            x["location_name"],
+        ),
+    )
+
+    deduped = []
+    seen = set()
+    for row in matches:
+        key = (row["location_code"], row["location_name"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
 # ========================================================
 # 0. PAGINA INSTELLINGEN & CONSTANTEN
 # ========================================================
@@ -178,6 +229,7 @@ col1, col2 = st.columns(2)
 maps_location_name = ""
 maps_language_code = "en"
 maps_location_code_input = ""
+maps_location_code_selected = None
 
 with col1:
     st.subheader("Stap 1: Keywords")
@@ -196,6 +248,42 @@ with col1:
             value=str(default_maps_location_code) if default_maps_location_code else "",
             help="Aanbevolen: gebruik location_code voor stabiele geo-targeting, bijv. 2840 voor United States."
         )
+        maps_location_lookup_query = st.text_input(
+            "Zoek stad/regio voor location_code",
+            placeholder="Amsterdam",
+            help="Zoekt officiële Google location_codes via DataForSEO."
+        )
+
+        if "maps_location_matches" not in st.session_state:
+            st.session_state["maps_location_matches"] = []
+
+        if st.button("Zoek location_code", disabled=not maps_location_lookup_query.strip()):
+            if not dfs_login or not dfs_password:
+                st.error("Vul DataForSEO login/password in om location codes op te zoeken.")
+            else:
+                try:
+                    st.session_state["maps_location_matches"] = search_google_locations(
+                        login=dfs_login,
+                        password=dfs_password,
+                        query=maps_location_lookup_query,
+                        limit=20,
+                    )
+                    if not st.session_state["maps_location_matches"]:
+                        st.warning("Geen locaties gevonden voor deze zoekterm.")
+                except Exception as e:
+                    st.error(f"Location lookup mislukt: {e}")
+
+        if st.session_state["maps_location_matches"]:
+            location_option_map = {
+                f"{item['location_name']} | code {item['location_code']}": item["location_code"]
+                for item in st.session_state["maps_location_matches"]
+            }
+            selected_location_label = st.selectbox(
+                "Kies gevonden locatie",
+                options=list(location_option_map.keys())
+            )
+            maps_location_code_selected = location_option_map[selected_location_label]
+            st.caption(f"Geselecteerde location_code: {maps_location_code_selected}")
         maps_language_label = st.selectbox(
             "Maps language_code",
             options=[f"{label} ({code})" for label, code in MAPS_LANGUAGE_CODE_BY_LABEL.items()],
@@ -714,9 +802,9 @@ if st.button("🚀 Start Analyse", type="primary"):
     manual_keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
     keywords = list(dict.fromkeys(manual_keywords))
     keyword_volumes = {kw: 0 for kw in manual_keywords}
-    maps_location_code = None
+    maps_location_code = maps_location_code_selected
 
-    if use_maps and maps_location_code_input.strip():
+    if use_maps and maps_location_code is None and maps_location_code_input.strip():
         try:
             maps_location_code = int(maps_location_code_input.strip())
         except ValueError:
