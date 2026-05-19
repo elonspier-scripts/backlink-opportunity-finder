@@ -4,7 +4,7 @@ import requests
 import re
 import json
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, urljoin, unquote
+from urllib.parse import urlparse, urljoin, unquote, parse_qs
 from openai import OpenAI
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -301,6 +301,30 @@ def extract_domain(val):
     if '://' in val: 
         val = urlparse(val).netloc
     return val.replace('www.', '')
+
+def normalize_serp_result_url(raw_url):
+    candidate = str(raw_url or "").strip()
+    if not candidate:
+        return ""
+
+    if not candidate.startswith(("http://", "https://")):
+        candidate = f"https://{candidate}"
+
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return ""
+
+    domain = extract_domain(parsed.netloc)
+    if domain.startswith("google.") and parsed.path == "/url":
+        query = parse_qs(parsed.query or "")
+        redirect_target = (query.get("q") or query.get("url") or [""])[0].strip()
+        if redirect_target.startswith(("http://", "https://")):
+            return redirect_target
+
+    if not parsed.netloc:
+        return ""
+    return candidate
 
 def ai_analyze(text, url, ai_client):
     try:
@@ -800,9 +824,10 @@ def get_dataforseo_organic_results(keywords, target_domain, pages, login, passwo
             task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
             for result in (task or {}).get("result") or []:
                 for item in (result or {}).get("items") or []:
-                    if item.get("type") != "organic":
+                    url = item.get("url") or item.get("target") or item.get("domain")
+                    if not url:
                         continue
-                    url = item.get("url")
+                    url = normalize_serp_result_url(url)
                     if not url:
                         continue
                     organic_rows.append({
