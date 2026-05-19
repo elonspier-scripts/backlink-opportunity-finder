@@ -190,9 +190,11 @@ with col1:
         f"{item['keyword']} (SV: {item['search_volume']})": item
         for item in st.session_state["keyword_suggestions"]
     }
+    default_suggestion_labels = list(suggestion_map.keys())[: min(10, len(suggestion_map))]
     selected_suggestion_labels = st.multiselect(
         "Selecteer suggesties om toe te voegen",
-        options=list(suggestion_map.keys())
+        options=list(suggestion_map.keys()),
+        default=default_suggestion_labels
     )
     selected_suggestion_keywords = [suggestion_map[label]["keyword"] for label in selected_suggestion_labels]
     selected_suggestion_volumes = {
@@ -703,14 +705,15 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
         collect_items(domain_tasks)
 
     if manual_keywords:
-        keyword_task = [{
-            "keywords": manual_keywords,
-            "location_name": location_name,
-            "language_name": language_name,
-            "include_seed_keyword": True
-        }]
-        keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
-        collect_items(keyword_tasks)
+        for manual_keyword in manual_keywords:
+            keyword_task = [{
+                "keywords": [manual_keyword],
+                "location_name": location_name,
+                "language_name": language_name,
+                "include_seed_keyword": True
+            }]
+            keyword_tasks = dataforseo_post("/keywords_data/google_ads/keywords_for_keywords/live", keyword_task, login, password)
+            collect_items(keyword_tasks)
 
     rows = [{"keyword": kw, "search_volume": volume} for kw, volume in suggestions.items()]
     if not rows and task_errors:
@@ -718,34 +721,32 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
     return sorted(rows, key=lambda x: x["search_volume"], reverse=True)[:limit]
 
 def get_dataforseo_organic_results(keywords, target_domain, pages, login, password):
-    tasks = []
     language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
     location_name = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+    organic_rows = []
     for keyword in keywords:
-        tasks.append({
+        task_payload = [{
             "keyword": keyword,
             "se_domain": target_domain,
             "location_name": location_name,
             "language_name": language_name,
             "depth": pages * 10
-        })
-
-    task_results = dataforseo_post("/serp/google/organic/live/advanced", tasks, login, password)
-    organic_rows = []
-    for task in task_results or []:
-        task_keyword = (task or {}).get("data", {}).get("keyword", "Onbekend")
-        for result in (task or {}).get("result") or []:
-            for item in (result or {}).get("items") or []:
-                if item.get("type") != "organic":
-                    continue
-                url = item.get("url")
-                if not url:
-                    continue
-                organic_rows.append({
-                    "keyword": task_keyword,
-                    "url": url,
-                    "title": item.get("title", "")
-                })
+        }]
+        task_results = dataforseo_post("/serp/google/organic/live/advanced", task_payload, login, password)
+        for task in task_results or []:
+            task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
+            for result in (task or {}).get("result") or []:
+                for item in (result or {}).get("items") or []:
+                    if item.get("type") != "organic":
+                        continue
+                    url = item.get("url")
+                    if not url:
+                        continue
+                    organic_rows.append({
+                        "keyword": task_keyword,
+                        "url": url,
+                        "title": item.get("title", "")
+                    })
     return organic_rows
 
 def normalize_maps_website(item):
@@ -758,34 +759,31 @@ def normalize_maps_website(item):
     return f"https://{website}"
 
 def fetch_maps_places(keywords, location_name, language_name, depth, se_domain, login, password):
-    tasks = [
-        {
+    rows = []
+    for keyword in keywords:
+        task_payload = [{
             "keyword": keyword,
             "location_name": location_name,
             "language_name": language_name,
             "se_domain": se_domain,
             "depth": depth,
-        }
-        for keyword in keywords
-    ]
-
-    task_results = dataforseo_post("/serp/google/maps/live/advanced", tasks, login, password)
-    rows = []
-    for task in task_results or []:
-        task_keyword = (task or {}).get("data", {}).get("keyword", "")
-        for result in (task or {}).get("result") or []:
-            for item in (result or {}).get("items") or []:
-                rows.append(
-                    {
-                        "searchString": task_keyword,
-                        "title": item.get("title") or item.get("name"),
-                        "website": normalize_maps_website(item),
-                        "categoryName": item.get("category") or item.get("main_category") or "Onbekend",
-                        "phone": item.get("phone") or item.get("phone_unformatted") or "",
-                        "emails": as_list(item.get("emails")),
-                        "socialProfiles": as_list(item.get("socials")),
-                    }
-                )
+        }]
+        task_results = dataforseo_post("/serp/google/maps/live/advanced", task_payload, login, password)
+        for task in task_results or []:
+            task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
+            for result in (task or {}).get("result") or []:
+                for item in (result or {}).get("items") or []:
+                    rows.append(
+                        {
+                            "searchString": task_keyword,
+                            "title": item.get("title") or item.get("name"),
+                            "website": normalize_maps_website(item),
+                            "categoryName": item.get("category") or item.get("main_category") or "Onbekend",
+                            "phone": item.get("phone") or item.get("phone_unformatted") or "",
+                            "emails": as_list(item.get("emails")),
+                            "socialProfiles": as_list(item.get("socials")),
+                        }
+                    )
     return rows
 
 # ========================================================
@@ -825,8 +823,35 @@ if st.button("🚀 Start Analyse", type="primary"):
     for kw in manual_keywords:
         keyword_volumes.setdefault(kw, 0)
 
-    if not oa_token or not selected_keywords:
-        st.error("Vul OpenAI key in en voeg minimaal 1 keyword toe (handmatig en/of suggesties).")
+    auto_generated_keywords = []
+    if not selected_keywords and use_maps and domain_for_suggestions.strip() and dfs_login and dfs_password:
+        try:
+            language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
+            suggestion_location = DATAFORSEO_LOCATION_BY_DOMAIN.get(target_domain, "Netherlands")
+            generated = get_keyword_suggestions(
+                manual_keywords=[],
+                domain_seed=domain_for_suggestions,
+                limit=suggestions_limit,
+                login=dfs_login,
+                password=dfs_password,
+                location_name=suggestion_location,
+                language_name=language_name
+            )
+            auto_generated_keywords = [item["keyword"] for item in generated]
+            for item in generated:
+                keyword_volumes[item["keyword"]] = item.get("search_volume", 0)
+        except Exception as e:
+            st.error(f"Automatische keyword generatie voor Maps mislukt: {e}")
+
+    keywords = list(dict.fromkeys(selected_keywords + auto_generated_keywords))
+
+    if not oa_token:
+        st.error("Vul OpenAI key in.")
+    elif not keywords:
+        if use_maps and domain_for_suggestions.strip():
+            st.error("Geen keywords gevonden. Probeer een ander domein of voeg handmatige keywords toe.")
+        else:
+            st.error("Voeg minimaal 1 keyword toe (handmatig, suggesties, of domein voor Maps generatie).")
     elif not use_maps and not use_serp:
         st.error("❌ Zet minimaal één van de twee scrapers (Maps of Search) aan in de linker menubalk.")
     elif (
@@ -854,7 +879,8 @@ if st.button("🚀 Start Analyse", type="primary"):
                 st.stop()
         
         openai_c = OpenAI(api_key=oa_token)
-        keywords = selected_keywords
+        if auto_generated_keywords:
+            st.info(f"{len(auto_generated_keywords)} keywords automatisch gegenereerd via domein voor Maps.")
         
         maps_opportunities = []
         search_opportunities = []
