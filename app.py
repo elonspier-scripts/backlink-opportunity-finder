@@ -742,13 +742,22 @@ def get_dataforseo_organic_results(keywords, target_domain, pages, login, passwo
     return organic_rows
 
 def normalize_maps_website(item):
-    website = item.get("url") or item.get("domain") or ""
+    website = item.get("website") or item.get("domain") or ""
     website = str(website).strip()
     if not website:
         return ""
     if website.startswith(("http://", "https://")):
         return website
     return f"https://{website}"
+
+def build_maps_summary(item):
+    title = (item.get("title") or item.get("name") or "This company").strip()
+    category = (item.get("category") or item.get("main_category") or "business").strip().lower()
+    address = (item.get("address") or "").strip()
+
+    if address:
+        return f"{title} is a {category} based in {address}."
+    return f"{title} is a {category}."
 
 def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, login, password):
     rows = []
@@ -773,7 +782,11 @@ def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, 
                         {
                             "searchString": task_keyword,
                             "title": item.get("title") or item.get("name"),
+                            "summary": build_maps_summary(item),
                             "website": normalize_maps_website(item),
+                            "sharedUrl": item.get("url") or "",
+                            "contactUrl": item.get("contact_url") or "",
+                            "address": item.get("address") or "",
                             "categoryName": item.get("category") or item.get("main_category") or "Onbekend",
                             "phone": item.get("phone") or item.get("phone_unformatted") or "",
                             "emails": as_list(item.get("emails")),
@@ -855,38 +868,21 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 maps_phone = normalize_phone_value(item.get('phoneUnformatted', item.get('phone', '')))
                                 maps_social_links = normalize_social_values(item.get('socialProfiles')) + normalize_social_values(item.get('socials'))
                                 maps_kw = item.get('searchString') or item.get('searchQuery') or (keywords[0] if keywords else 'Onbekend')
+                                final_emails = maps_emails
+                                final_phone = maps_phone if maps_phone else "N/A"
 
-                                fallback_contacts = {"emails": [], "phones": [], "social_links": []}
-                                needs_fallback = not maps_emails or not maps_phone or not maps_social_links
-                                if needs_fallback and website:
-                                    fallback_contacts = enrich_contacts_from_website(website)
-
-                                final_emails = maps_emails if maps_emails else fallback_contacts["emails"]
-                                final_phone = maps_phone if maps_phone else (fallback_contacts["phones"][0] if fallback_contacts["phones"] else "Geen")
-                                 
-                                # Let op: force_summary=True zodat AI ALTIJD de omschrijving pakt
-                                analysis = process_site(
-                                    website,
-                                    openai_c,
-                                    PARTNER_TERMS,
-                                    maps_kw,
-                                    force_summary=True,
-                                    check_404=False,
-                                    max_link_checks=max_outbound_checks
-                                )
-                                
                                 maps_opportunities.append({
-                                    "Bedrijf": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                    "Omschrijving": analysis['Omschrijving'] if analysis else "Geen beschrijving",
-                                    "Category": item.get('categoryName', 'Onbekend'),
+                                    "Company": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
+                                    "Summary": item.get('summary') or "No description",
+                                    "Category": item.get('categoryName', 'Unknown'),
                                     "Keyword": maps_kw,
-                                    "Search Volume": keyword_volumes.get(maps_kw, 0),
                                     "Domain": dom,
-                                    "Telefoon": final_phone,
-                                    "Emails": ", ".join(final_emails) if final_emails else (analysis['emails'] if analysis and analysis['emails'] else ""),
-                                    "Social Links": ", ".join(sorted(set((maps_social_links or []) + fallback_contacts["social_links"] + (analysis['social_links'] if analysis else [])))),
-                                    "Partner URL": analysis['url'] if analysis and analysis['url'] else "Geen partnerpagina",
-                                    "Score Linkbuilding": analysis['ai'] if analysis and analysis['ai'] else "Geen partnerpagina gevonden"
+                                    "Shared URL": item.get('sharedUrl', ''),
+                                    "Contact URL": item.get('contactUrl', ''),
+                                    "Address": item.get('address', ''),
+                                    "Phone": final_phone,
+                                    "Emails": ", ".join(final_emails) if final_emails else "",
+                                    "Social Links": ", ".join(sorted(set(maps_social_links or [])))
                                 })
                                 existing.add(dom)
                 except Exception as e:
@@ -957,7 +953,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                    df_maps = df_maps[["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(df_maps, use_container_width=True)
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
@@ -979,7 +975,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                df_maps = df_maps[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Score Linkbuilding"]]
+                df_maps = df_maps[["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(df_maps, use_container_width=True)
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
