@@ -4,23 +4,20 @@ Deze Streamlit app combineert Google Maps leads met SEO-partnerpagina analyse.
 
 ## ✨ Functionaliteiten
 
-- **Google Maps via Apify:** Lokale bedrijven ophalen met contact-verrijking.
-- **Maps provider switch:** `Auto` gebruikt Apify als token aanwezig is, anders DataForSEO fallback.
+- **Google Maps via DataForSEO:** Lokale bedrijven ophalen inclusief website/telefoon en verdere website-verrijking.
 - **Google Search via DataForSEO (live organic):** Organische resultaten ophalen per keyword.
 - **Keyword suggesties met volume:** Suggesties op basis van handmatige keywords en/of domein.
 - **Partnerpagina detectie + AI scoring:** Analyse van linkbuilding-kansen met OpenAI.
-- **Contact fallback scraping:** Als verrijking mist, wordt website scraping gebruikt voor email/social/telefoon.
+- **Contact fallback scraping:** Contact/about-pagina's worden meegepakt voor email/social/telefoon als provider-data mist.
 
 ## 🔑 Benodigde API keys
 
-1. **Apify API Token** (voor Google Maps)
-2. **DataForSEO Login + Password** (voor Search + keyword suggesties)
-3. **OpenAI API Key** (voor AI analyse)
+1. **DataForSEO Login + Password** (voor Maps, Search, keyword suggesties)
+2. **OpenAI API Key** (voor AI analyse)
 
 Voor Streamlit Cloud, zet deze in Secrets:
 
 ```toml
-APIFY = "jouw_apify_token"
 DATAFORSEO_LOGIN = "jouw_dataforseo_login"
 DATAFORSEO_PASSWORD = "jouw_dataforseo_password"
 OPENAI = "jouw_openai_key"
