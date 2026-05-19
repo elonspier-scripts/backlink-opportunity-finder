@@ -179,7 +179,7 @@ with st.sidebar.expander("Actieve zoektermen"):
 # 2. INPUT SECTIE (HOOFDSCHERM)
 # ========================================================
 col1, col2 = st.columns(2)
-maps_location_context = ""
+maps_location_name = ""
 maps_language_code = "en"
 
 with col1:
@@ -191,10 +191,10 @@ with col1:
 
     if use_maps:
         st.markdown("**Maps instellingen**")
-        maps_location_context = st.text_input(
-            "Maps locatie context (optioneel)",
-            value="Amsterdam, Nederland",
-            help="Wordt aan de Maps keyword query toegevoegd, bijv. 'loodgieter Amsterdam'."
+        maps_location_name = st.text_input(
+            "Maps location_name (optioneel)",
+            value="Amsterdam, North Holland, Netherlands",
+            help="Gebruik het volledige DataForSEO locatieformaat, bijv. 'London,England,United Kingdom'."
         )
         maps_language_label = st.selectbox(
             "Maps language_code",
@@ -821,20 +821,39 @@ def normalize_maps_website(item):
         return website
     return f"https://{website}"
 
-def fetch_maps_places(keywords, location_context, language_code, depth, se_domain, login, password):
+def fetch_maps_places(keywords, location_name, language_code, depth, se_domain, login, password):
     rows = []
     for keyword in keywords:
         map_keyword = str(keyword).strip()
-        if location_context and location_context.lower() not in map_keyword.lower():
-            map_keyword = f"{map_keyword} {location_context}".strip()
 
-        payload = {
+        primary_payload = {
             "keyword": map_keyword,
             "language_code": language_code,
             "se_domain": se_domain,
             "depth": depth,
         }
-        task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
+        if location_name.strip():
+            primary_payload["location_name"] = location_name.strip()
+
+        fallback_payload = {
+            "keyword": f"{map_keyword} {location_name}".strip() if location_name.strip() else map_keyword,
+            "language_code": language_code,
+            "se_domain": se_domain,
+            "depth": depth,
+        }
+
+        task_results = None
+        last_error = None
+        for payload in [primary_payload, fallback_payload]:
+            try:
+                task_results = dataforseo_post("/serp/google/maps/live/advanced", [payload], login, password)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+
+        if task_results is None:
+            raise RuntimeError(f"Maps request failed for '{map_keyword}': {last_error}")
 
         for task in task_results or []:
             task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
@@ -969,14 +988,14 @@ if st.button("🚀 Start Analyse", type="primary"):
                     all_categories = list(set(all_categories))
                     st.write(f"🔍 {len(all_categories)} categorie-filters toegepast.")
 
-                location_label = maps_location_context if maps_location_context else "zonder extra locatie"
-                st.write(f"🗺️ Maps zoeken met locatie-context: {location_label}...")
+                location_label = maps_location_name if maps_location_name else "zonder location_name"
+                st.write(f"🗺️ Maps zoeken met location_name: {location_label}...")
                 try:
                     maps_keywords = keywords + all_categories if expand_categories and all_categories else keywords
                     maps_keywords = list(dict.fromkeys([k for k in maps_keywords if str(k).strip()]))
                     maps_items = fetch_maps_places(
                         keywords=maps_keywords,
-                        location_context=maps_location_context,
+                        location_name=maps_location_name,
                         language_code=maps_language_code,
                         depth=maps_max_results,
                         se_domain=target_domain,
