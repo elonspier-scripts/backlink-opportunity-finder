@@ -26,6 +26,14 @@ DATAFORSEO_LOCATION_BY_DOMAIN = {
     "google.de": "Germany",
     "google.fr": "France"
 }
+MAPS_LANGUAGE_CODE_BY_LABEL = {
+    "Dutch": "nl",
+    "English": "en",
+    "German": "de",
+    "French": "fr",
+    "Spanish": "es",
+    "Italian": "it",
+}
 PHONE_REGEX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{0,4}")
 
 # ========================================================
@@ -105,12 +113,10 @@ target_domain = st.sidebar.selectbox("Google Domein", ["google.nl", "google.be",
 st.sidebar.divider()
 st.sidebar.header("📍 Lokale Leads (Google Maps)")
 use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
-location_query = "Amsterdam, Nederland"
 maps_max_results = 10
 expand_categories = True
 
 if use_maps:
-    location_query = st.sidebar.text_input("Locatie", value="Amsterdam, Nederland", help="De stad of regio waar je wilt zoeken.")
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
     expand_categories = st.sidebar.checkbox("AI Categorieën Uitbreiding", value=True, help="Laat AI synoniemen verzamelen voor Maps categorieën.")
     st.sidebar.info("Maps draait via DataForSEO + website contact scraping fallback.")
@@ -173,6 +179,8 @@ with st.sidebar.expander("Actieve zoektermen"):
 # 2. INPUT SECTIE (HOOFDSCHERM)
 # ========================================================
 col1, col2 = st.columns(2)
+maps_location_context = ""
+maps_language_code = "en"
 
 with col1:
     st.subheader("Stap 1: Keywords")
@@ -180,6 +188,21 @@ with col1:
     domain_for_suggestions = st.text_input("Website domein voor keyword suggesties (optioneel)", placeholder="voorbeeld.nl")
     suggestions_limit = st.slider("Max keyword suggesties", 5, 100, 25)
     include_manual_in_suggestions = st.checkbox("Gebruik handmatige keywords ook als seed", value=True)
+
+    if use_maps:
+        st.markdown("**Maps instellingen**")
+        maps_location_context = st.text_input(
+            "Maps locatie context (optioneel)",
+            value="Amsterdam, Nederland",
+            help="Wordt aan de Maps keyword query toegevoegd, bijv. 'loodgieter Amsterdam'."
+        )
+        maps_language_label = st.selectbox(
+            "Maps language_code",
+            options=[f"{label} ({code})" for label, code in MAPS_LANGUAGE_CODE_BY_LABEL.items()],
+            index=0,
+            help="DataForSEO Maps verwacht language_code (bijv. en, nl, de)."
+        )
+        maps_language_code = maps_language_label.split("(")[-1].rstrip(")")
 
     if "keyword_suggestions" not in st.session_state:
         st.session_state["keyword_suggestions"] = []
@@ -798,16 +821,16 @@ def normalize_maps_website(item):
         return website
     return f"https://{website}"
 
-def fetch_maps_places(keywords, location_name, language_name, depth, se_domain, login, password):
+def fetch_maps_places(keywords, location_context, language_code, depth, se_domain, login, password):
     rows = []
     for keyword in keywords:
         map_keyword = str(keyword).strip()
-        if location_name and location_name.lower() not in map_keyword.lower():
-            map_keyword = f"{map_keyword} {location_name}".strip()
+        if location_context and location_context.lower() not in map_keyword.lower():
+            map_keyword = f"{map_keyword} {location_context}".strip()
 
         payload = {
             "keyword": map_keyword,
-            "language_name": language_name,
+            "language_code": language_code,
             "se_domain": se_domain,
             "depth": depth,
         }
@@ -936,7 +959,6 @@ if st.button("🚀 Start Analyse", type="primary"):
             # ---------------------------------------------------------
             if use_maps:
                 st.write("📍 Google Maps Scraper (DataForSEO) is gestart...")
-                language_name = DATAFORSEO_LANGUAGE_BY_DOMAIN.get(target_domain, "English")
                 
                 all_categories = []
                 if expand_categories:
@@ -947,14 +969,15 @@ if st.button("🚀 Start Analyse", type="primary"):
                     all_categories = list(set(all_categories))
                     st.write(f"🔍 {len(all_categories)} categorie-filters toegepast.")
 
-                st.write(f"🗺️ Maps zoeken in {location_query}...")
+                location_label = maps_location_context if maps_location_context else "zonder extra locatie"
+                st.write(f"🗺️ Maps zoeken met locatie-context: {location_label}...")
                 try:
                     maps_keywords = keywords + all_categories if expand_categories and all_categories else keywords
                     maps_keywords = list(dict.fromkeys([k for k in maps_keywords if str(k).strip()]))
                     maps_items = fetch_maps_places(
                         keywords=maps_keywords,
-                        location_name=location_query,
-                        language_name=language_name,
+                        location_context=maps_location_context,
+                        language_code=maps_language_code,
                         depth=maps_max_results,
                         se_domain=target_domain,
                         login=dfs_login,

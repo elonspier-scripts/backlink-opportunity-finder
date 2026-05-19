@@ -5,6 +5,7 @@ Deze Streamlit app combineert Google Maps leads met SEO-partnerpagina analyse.
 ## ✨ Functionaliteiten
 
 - **Google Maps via DataForSEO:** Lokale bedrijven ophalen inclusief website/telefoon en verdere website-verrijking.
+- **Maps taal via language_code:** Kies in de app een taalcode (bijv. English -> `en`, Dutch -> `nl`).
 - **Google Search via DataForSEO (live organic):** Organische resultaten ophalen per keyword.
 - **Keyword suggesties met volume:** Suggesties op basis van handmatige keywords en/of domein.
 - **Partnerpagina detectie + AI scoring:** Analyse van linkbuilding-kansen met OpenAI.
