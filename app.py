@@ -26,13 +26,6 @@ DATAFORSEO_LOCATION_BY_DOMAIN = {
     "google.de": "Germany",
     "google.fr": "France"
 }
-DATAFORSEO_LOCATION_CODE_BY_DOMAIN = {
-    "google.nl": 1528,
-    "google.be": 1056,
-    "google.com": 2840,
-    "google.de": 1276,
-    "google.fr": 1250
-}
 PHONE_REGEX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{0,4}")
 
 # ========================================================
@@ -725,14 +718,12 @@ def get_keyword_suggestions(manual_keywords, domain_seed, limit, login, password
     if domain_seed.strip():
         ranked_endpoint = "/dataforseo_labs/google/ranked_keywords/live"
         domain_target = extract_domain(domain_seed)
-        location_code = DATAFORSEO_LOCATION_CODE_BY_DOMAIN.get(target_domain)
         primary_payload = {
             "target": domain_target,
             "language_name": language_name,
+            "location_name": location_name,
             "limit": max(limit, 100)
         }
-        if location_code:
-            primary_payload["location_code"] = location_code
 
         ranked_payload_variants = [
             primary_payload,
