@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import re
 import json
-from html import escape
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, unquote, parse_qs
 from openai import OpenAI
@@ -364,66 +363,6 @@ def normalize_serp_result_url(raw_url):
     if not parsed.netloc:
         return ""
     return candidate
-
-def build_html_link(url, label=None):
-    candidate = str(url or "").strip()
-    if not candidate:
-        return ""
-    href = candidate if candidate.startswith(("http://", "https://")) else f"https://{candidate}"
-    link_label = str(label or candidate).strip() or href
-    return f'<a href="{escape(href, quote=True)}" target="_blank">{escape(link_label)}</a>'
-
-def format_company_cell(value):
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parts = [part.strip() for part in raw.splitlines() if part.strip()]
-    if not parts:
-        return ""
-    head = f"<strong>{escape(parts[0])}</strong>"
-    tail = "<br>".join(escape(part) for part in parts[1:])
-    return f"{head}<br>{tail}" if tail else head
-
-def format_social_links_cell(value):
-    if isinstance(value, list):
-        urls = [str(v).strip() for v in value if str(v).strip()]
-    else:
-        urls = [line.strip() for line in str(value or "").splitlines() if line.strip()]
-    if not urls:
-        return ""
-    return "<br>".join(build_html_link(url) for url in urls)
-
-def render_maps_table(df_maps):
-    df_render = df_maps.copy()
-    df_render["Company"] = df_render["Company"].apply(format_company_cell)
-    df_render["Summary"] = df_render["Summary"].fillna("").apply(lambda x: escape(str(x)).replace("\n", "<br>"))
-    df_render["Category"] = df_render["Category"].fillna("").apply(lambda x: escape(str(x)))
-    df_render["Keyword"] = df_render["Keyword"].fillna("").apply(lambda x: escape(str(x)))
-    df_render["Domain"] = df_render["Domain"].fillna("").apply(lambda x: build_html_link(x, x))
-    df_render["Shared URL"] = df_render["Shared URL"].fillna("").apply(build_html_link)
-    df_render["Phone"] = df_render["Phone"].fillna("").apply(lambda x: escape(str(x)))
-    df_render["Emails"] = df_render["Emails"].fillna("").apply(lambda x: escape(str(x)).replace(", ", "<br>"))
-    df_render["Social Links"] = df_render["Social Links"].apply(format_social_links_cell)
-
-    table_html = df_render.to_html(index=False, escape=False, classes="maps-results-table")
-    st.markdown(
-        """
-<style>
-.maps-results-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-.maps-results-table td, .maps-results-table th {
-  white-space: normal;
-  vertical-align: top;
-  word-break: break-word;
-  padding: 8px;
-  text-align: left;
-}
-</style>
-""" + table_html,
-        unsafe_allow_html=True,
-    )
 
 def ai_analyze(text, url, ai_client):
     try:
@@ -1309,8 +1248,22 @@ if st.button("🚀 Start Analyse", type="primary"):
                     df_maps = pd.DataFrame(maps_opportunities)
                     maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Phone", "Emails", "Social Links"]
                     df_maps = df_maps[maps_columns]
+                    df_maps_display = df_maps.copy()
+                    df_maps_display["Domain"] = df_maps_display["Domain"].apply(
+                        lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
+                    )
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
-                    render_maps_table(df_maps)
+                    st.dataframe(
+                        df_maps_display,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Domain": st.column_config.LinkColumn("Domain"),
+                            "Shared URL": st.column_config.LinkColumn("Shared URL"),
+                            "Social Links": st.column_config.TextColumn("Social Links", width="large"),
+                            "Company": st.column_config.TextColumn("Company", width="large"),
+                        },
+                    )
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
                 else:
                     st.warning("Geen Maps leads gevonden.")
@@ -1332,8 +1285,22 @@ if st.button("🚀 Start Analyse", type="primary"):
                 df_maps = pd.DataFrame(maps_opportunities)
                 maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Phone", "Emails", "Social Links"]
                 df_maps = df_maps[maps_columns]
+                df_maps_display = df_maps.copy()
+                df_maps_display["Domain"] = df_maps_display["Domain"].apply(
+                    lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
+                )
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
-                render_maps_table(df_maps)
+                st.dataframe(
+                    df_maps_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Domain": st.column_config.LinkColumn("Domain"),
+                        "Shared URL": st.column_config.LinkColumn("Shared URL"),
+                        "Social Links": st.column_config.TextColumn("Social Links", width="large"),
+                        "Company": st.column_config.TextColumn("Company", width="large"),
+                    },
+                )
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
             else:
                 st.warning("Geen Maps leads gevonden.")
