@@ -164,15 +164,21 @@ st.sidebar.header("📍 Lokale Leads (Google Maps)")
 use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
 maps_max_results = 10
 maps_enable_contact_fallback = False
+maps_enable_business_listing_fallback = False
 
 if use_maps:
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
+    maps_enable_business_listing_fallback = st.sidebar.toggle(
+        "Enable Business Listing fallback",
+        value=True,
+        help="Vul ontbrekende Maps velden aan via DataForSEO Business Listings."
+    )
     maps_enable_contact_fallback = st.sidebar.toggle(
         "Enable website contact fallback",
         value=False,
         help="When enabled, enrich missing contact URL, email, and social links from the website."
     )
-    st.sidebar.info("Maps runs on DataForSEO. Contact fallback is optional.")
+    st.sidebar.info("Maps runs on DataForSEO. Business Listing fallback is API-only and efficient.")
 
 # --- SEARCH TOGGLE ---
 st.sidebar.divider()
@@ -897,6 +903,91 @@ def build_maps_summary(item):
         return f"{title} is a {category} based in {address}."
     return f"{title} is a {category}."
 
+def normalize_name_for_match(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+def extract_city_from_address(value):
+    parts = [part.strip() for part in str(value or "").split(",") if part.strip()]
+    if not parts:
+        return ""
+    if len(parts) >= 2:
+        return normalize_name_for_match(parts[-2])
+    return normalize_name_for_match(parts[-1])
+
+def normalize_business_listing_item(item):
+    website = (item.get("url") or item.get("domain") or "").strip()
+    if website and not website.startswith(("http://", "https://")):
+        website = f"https://{website}"
+
+    domain = extract_domain(website or item.get("domain") or "")
+    title = (item.get("title") or item.get("original_title") or "").strip()
+    phone = normalize_phone_value(item.get("phone") or "")
+    address = (item.get("address") or "").strip()
+    city = normalize_name_for_match((item.get("address_info") or {}).get("city") or extract_city_from_address(address))
+
+    return {
+        "title": title,
+        "domain": domain,
+        "url": website,
+        "phone": phone,
+        "address": address,
+        "city": city,
+        "category": item.get("category") or "",
+    }
+
+def fetch_business_listing_candidates(company_title, location_code, login, password, limit=25):
+    title = (company_title or "").strip()
+    if not title:
+        return []
+
+    payload = {
+        "title": title,
+        "limit": limit,
+    }
+    if location_code is not None:
+        payload["location_code"] = int(location_code)
+
+    tasks = dataforseo_post("/business_data/business_listings/search/live", [payload], login, password)
+    rows = []
+    for task in tasks or []:
+        for result in (task or {}).get("result") or []:
+            for item in (result or {}).get("items") or []:
+                if (item or {}).get("type") != "business_listing":
+                    continue
+                normalized = normalize_business_listing_item(item or {})
+                if normalized["domain"] or normalized["phone"] or normalized["title"]:
+                    rows.append(normalized)
+    return rows
+
+def pick_best_business_listing_match(maps_item, candidates):
+    if not candidates:
+        return None
+
+    maps_domain = extract_domain(maps_item.get("website") or "")
+    maps_phone = normalize_phone_value(maps_item.get("phone") or "")
+    maps_title = normalize_name_for_match(maps_item.get("title") or "")
+    maps_city = extract_city_from_address(maps_item.get("address") or "")
+
+    best_match = None
+    best_score = -1
+    for row in candidates:
+        score = 0
+        if maps_domain and row.get("domain") == maps_domain:
+            score += 60
+        if maps_phone and row.get("phone") and row["phone"] == maps_phone:
+            score += 30
+        if maps_title and row.get("title") and normalize_name_for_match(row["title"]) == maps_title:
+            score += 20
+        if maps_city and row.get("city") and row["city"] == maps_city:
+            score += 10
+        if score > best_score:
+            best_score = score
+            best_match = row
+
+    if best_score < 20:
+        return None
+    return best_match
+
 def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, login, password):
     rows = []
     for keyword in keywords:
@@ -969,6 +1060,7 @@ if st.button("🚀 Start Analyse", type="primary"):
         
         maps_opportunities = []
         search_opportunities = []
+        business_listing_cache = {}
 
         with st.status("Bezig met scrapen en analyseren...", expanded=True) as status:
             
@@ -1008,6 +1100,35 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 final_phone = maps_phone if maps_phone else "N/A"
                                 final_social_links = sorted(set(maps_social_links or []))
                                 final_contact_url = item.get('contactUrl', '')
+                                final_address = item.get('address', '')
+                                final_category = item.get('categoryName', 'Unknown')
+
+                                if maps_enable_business_listing_fallback:
+                                    needs_listing_fallback = not final_contact_url or final_phone == "N/A" or not final_address or final_category == "Unknown"
+                                    if needs_listing_fallback:
+                                        listing_key = ((item.get('title') or '').strip().lower(), maps_location_code)
+                                        if listing_key not in business_listing_cache:
+                                            try:
+                                                business_listing_cache[listing_key] = fetch_business_listing_candidates(
+                                                    company_title=item.get('title') or '',
+                                                    location_code=maps_location_code,
+                                                    login=dfs_login,
+                                                    password=dfs_password,
+                                                    limit=25,
+                                                )
+                                            except Exception:
+                                                business_listing_cache[listing_key] = []
+
+                                        matched_listing = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
+                                        if matched_listing:
+                                            if not final_contact_url:
+                                                final_contact_url = matched_listing.get("url", "")
+                                            if final_phone == "N/A" and matched_listing.get("phone"):
+                                                final_phone = matched_listing["phone"]
+                                            if not final_address and matched_listing.get("address"):
+                                                final_address = matched_listing["address"]
+                                            if final_category == "Unknown" and matched_listing.get("category"):
+                                                final_category = matched_listing["category"]
 
                                 if maps_enable_contact_fallback and website:
                                     needs_fallback = not final_contact_url or not final_emails or not final_social_links
@@ -1027,12 +1148,12 @@ if st.button("🚀 Start Analyse", type="primary"):
 
                                 maps_row = {
                                     "Company": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                    "Category": item.get('categoryName', 'Unknown'),
+                                    "Category": final_category,
                                     "Keyword": maps_kw,
                                     "Domain": dom,
                                     "Shared URL": item.get('sharedUrl', ''),
                                     "Contact URL": final_contact_url,
-                                    "Address": item.get('address', ''),
+                                    "Address": final_address,
                                     "Phone": final_phone,
                                     "Emails": ", ".join(final_emails) if final_emails else "",
                                     "Social Links": ", ".join(final_social_links)
