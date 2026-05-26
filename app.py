@@ -1086,83 +1086,107 @@ if st.button("🚀 Start Analyse", type="primary"):
                     for item in maps_items:
                         website = item.get('website')
                         title = item.get('title')
-                        
-                        if website:
-                            dom = extract_domain(website)
-                            if dom not in existing and dom not in SOCIAL_DOMAINS:
-                                st.write(f"Maps Bedrijf gevonden: **{title}**. Partner-check...")
-                                
-                                maps_emails = as_list(item.get('emails'))
-                                maps_phone = normalize_phone_value(item.get('phoneUnformatted', item.get('phone', '')))
-                                maps_social_links = normalize_social_values(item.get('socialProfiles')) + normalize_social_values(item.get('socials'))
-                                maps_kw = item.get('searchString') or item.get('searchQuery') or (keywords[0] if keywords else 'Onbekend')
-                                final_emails = maps_emails
-                                final_phone = maps_phone if maps_phone else "N/A"
-                                final_social_links = sorted(set(maps_social_links or []))
-                                final_contact_url = item.get('contactUrl', '')
-                                final_address = item.get('address', '')
-                                final_category = item.get('categoryName', 'Unknown')
 
-                                if maps_enable_business_listing_fallback:
-                                    needs_listing_fallback = not final_contact_url or final_phone == "N/A" or not final_address or final_category == "Unknown"
-                                    if needs_listing_fallback:
-                                        listing_key = ((item.get('title') or '').strip().lower(), maps_location_code)
-                                        if listing_key not in business_listing_cache:
-                                            try:
-                                                business_listing_cache[listing_key] = fetch_business_listing_candidates(
-                                                    company_title=item.get('title') or '',
-                                                    location_code=maps_location_code,
-                                                    login=dfs_login,
-                                                    password=dfs_password,
-                                                    limit=25,
-                                                )
-                                            except Exception:
-                                                business_listing_cache[listing_key] = []
+                        maps_emails = as_list(item.get('emails'))
+                        maps_phone = normalize_phone_value(item.get('phoneUnformatted', item.get('phone', '')))
+                        maps_social_links = normalize_social_values(item.get('socialProfiles')) + normalize_social_values(item.get('socials'))
+                        maps_kw = item.get('searchString') or item.get('searchQuery') or (keywords[0] if keywords else 'Onbekend')
+                        final_website = website or ""
+                        final_shared_url = item.get('sharedUrl', '')
+                        final_contact_url = item.get('contactUrl', '')
+                        final_address = item.get('address', '')
+                        final_category = item.get('categoryName', 'Unknown')
+                        final_phone = maps_phone if maps_phone else "N/A"
+                        final_emails = maps_emails
+                        final_social_links = sorted(set(maps_social_links or []))
+                        matched_listing = None
 
-                                        matched_listing = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
-                                        if matched_listing:
-                                            if not final_contact_url:
-                                                final_contact_url = matched_listing.get("url", "")
-                                            if final_phone == "N/A" and matched_listing.get("phone"):
-                                                final_phone = matched_listing["phone"]
-                                            if not final_address and matched_listing.get("address"):
-                                                final_address = matched_listing["address"]
-                                            if final_category == "Unknown" and matched_listing.get("category"):
-                                                final_category = matched_listing["category"]
+                        if maps_enable_business_listing_fallback:
+                            needs_listing_fallback = (
+                                not final_website
+                                or not final_shared_url
+                                or not final_contact_url
+                                or not final_address
+                                or final_category == "Unknown"
+                                or final_phone == "N/A"
+                                or not title
+                            )
+                            if needs_listing_fallback:
+                                listing_key = ((item.get('title') or '').strip().lower(), maps_location_code)
+                                if listing_key not in business_listing_cache:
+                                    try:
+                                        business_listing_cache[listing_key] = fetch_business_listing_candidates(
+                                            company_title=item.get('title') or '',
+                                            location_code=maps_location_code,
+                                            login=dfs_login,
+                                            password=dfs_password,
+                                            limit=25,
+                                        )
+                                    except Exception:
+                                        business_listing_cache[listing_key] = []
 
-                                if maps_enable_contact_fallback and website:
-                                    needs_fallback = not final_contact_url or not final_emails or not final_social_links
-                                    if needs_fallback:
-                                        fallback_contacts = enrich_contacts_from_website(website)
-                                        if not final_contact_url:
-                                            final_contact_url = fallback_contacts.get("contact_url", "")
-                                        if not final_emails:
-                                            final_emails = fallback_contacts.get("emails", [])
-                                        if not maps_phone:
-                                            fallback_phones = fallback_contacts.get("phones", [])
-                                            if fallback_phones:
-                                                final_phone = fallback_phones[0]
-                                        fallback_social = fallback_contacts.get("social_links", [])
-                                        if fallback_social:
-                                            final_social_links = sorted(set(final_social_links + fallback_social))
+                                matched_listing = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
+                                if matched_listing:
+                                    if not final_website:
+                                        final_website = matched_listing.get("url", "")
+                                    if not final_shared_url:
+                                        final_shared_url = matched_listing.get("url", "")
+                                    if not final_contact_url:
+                                        final_contact_url = matched_listing.get("url", "")
+                                    if final_phone == "N/A" and matched_listing.get("phone"):
+                                        final_phone = matched_listing["phone"]
+                                    if not final_address and matched_listing.get("address"):
+                                        final_address = matched_listing["address"]
+                                    if final_category == "Unknown" and matched_listing.get("category"):
+                                        final_category = matched_listing["category"]
 
-                                maps_row = {
-                                    "Company": title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else dom,
-                                    "Category": final_category,
-                                    "Keyword": maps_kw,
-                                    "Domain": dom,
-                                    "Shared URL": item.get('sharedUrl', ''),
-                                    "Contact URL": final_contact_url,
-                                    "Address": final_address,
-                                    "Phone": final_phone,
-                                    "Emails": ", ".join(final_emails) if final_emails else "",
-                                    "Social Links": ", ".join(final_social_links)
-                                }
-                                if maps_enable_contact_fallback:
-                                    maps_row["Summary"] = item.get('summary') or "No description"
+                        dom = extract_domain(final_website)
+                        if not dom:
+                            continue
+                        if dom in existing or dom in SOCIAL_DOMAINS:
+                            continue
 
-                                maps_opportunities.append(maps_row)
-                                existing.add(dom)
+                        st.write(f"Maps Bedrijf gevonden: **{title or dom}**. Partner-check...")
+
+                        if maps_enable_contact_fallback and final_website:
+                            needs_fallback = not final_contact_url or not final_emails or not final_social_links or final_phone == "N/A"
+                            if needs_fallback:
+                                fallback_contacts = enrich_contacts_from_website(final_website)
+                                if not final_contact_url:
+                                    final_contact_url = fallback_contacts.get("contact_url", "")
+                                if not final_emails:
+                                    final_emails = fallback_contacts.get("emails", [])
+                                if final_phone == "N/A":
+                                    fallback_phones = fallback_contacts.get("phones", [])
+                                    if fallback_phones:
+                                        final_phone = fallback_phones[0]
+                                fallback_social = fallback_contacts.get("social_links", [])
+                                if fallback_social:
+                                    final_social_links = sorted(set(final_social_links + fallback_social))
+
+                        final_company = title if title and str(title).strip().upper() not in ["N/A", "NA", ""] else ""
+                        if not final_company and matched_listing and matched_listing.get("title"):
+                            final_company = matched_listing["title"]
+                        if not final_company:
+                            final_company = dom
+
+                        maps_row = {
+                            "Company": final_company,
+                            "Category": final_category,
+                            "Keyword": maps_kw,
+                            "Domain": dom,
+                            "Shared URL": final_shared_url,
+                            "Contact URL": final_contact_url,
+                            "Address": final_address,
+                            "Phone": final_phone,
+                            "Emails": ", ".join(final_emails) if final_emails else "",
+                            "Social Links": ", ".join(final_social_links)
+                        }
+                        if maps_enable_contact_fallback:
+                            maps_row["Summary"] = item.get('summary') or "No description"
+
+                        maps_opportunities.append(maps_row)
+                        existing.add(dom)
                 except Exception as e:
                     st.error(f"Google Maps call mislukt (DataForSEO): {e}")
 
