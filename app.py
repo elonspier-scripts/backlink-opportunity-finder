@@ -1001,8 +1001,6 @@ def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, 
                             "title": item.get("title") or item.get("name"),
                             "summary": build_maps_summary(item),
                             "website": normalize_maps_website(item),
-                            "sharedUrl": item.get("url") or "",
-                            "contactUrl": item.get("contact_url") or "",
                             "address": item.get("address") or "",
                             "categoryName": item.get("category") or item.get("main_category") or "Onbekend",
                             "phone": item.get("phone") or item.get("phone_unformatted") or "",
@@ -1080,8 +1078,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                         maps_social_links = normalize_social_values(item.get('socialProfiles')) + normalize_social_values(item.get('socials'))
                         maps_kw = item.get('searchString') or item.get('searchQuery') or (keywords[0] if keywords else 'Onbekend')
                         final_website = website or ""
-                        final_shared_url = item.get('sharedUrl', '')
-                        final_contact_url = item.get('contactUrl', '')
                         final_address = item.get('address', '')
                         final_category = item.get('categoryName', 'Unknown')
                         final_phone = maps_phone if maps_phone else "N/A"
@@ -1091,8 +1087,6 @@ if st.button("🚀 Start Analyse", type="primary"):
 
                         needs_listing_fallback = (
                             not final_website
-                            or not final_shared_url
-                            or not final_contact_url
                             or not final_address
                             or final_category == "Unknown"
                             or final_phone == "N/A"
@@ -1116,10 +1110,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                             if matched_listing:
                                 if not final_website:
                                     final_website = matched_listing.get("url", "")
-                                if not final_shared_url:
-                                    final_shared_url = matched_listing.get("url", "")
-                                if not final_contact_url:
-                                    final_contact_url = matched_listing.get("url", "")
                                 if final_phone == "N/A" and matched_listing.get("phone"):
                                     final_phone = matched_listing["phone"]
                                 if not final_address and matched_listing.get("address"):
@@ -1136,11 +1126,9 @@ if st.button("🚀 Start Analyse", type="primary"):
                         st.write(f"Maps Bedrijf gevonden: **{title or dom}**. Partner-check...")
 
                         if final_website:
-                            needs_fallback = not final_contact_url or not final_emails or not final_social_links or final_phone == "N/A"
+                            needs_fallback = not final_emails or not final_social_links or final_phone == "N/A"
                             if needs_fallback:
                                 fallback_contacts = enrich_contacts_from_website(final_website)
-                                if not final_contact_url:
-                                    final_contact_url = fallback_contacts.get("contact_url", "")
                                 if not final_emails:
                                     final_emails = fallback_contacts.get("emails", [])
                                 if final_phone == "N/A":
@@ -1167,8 +1155,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                             "Category": final_category,
                             "Keyword": maps_kw,
                             "Domain": dom,
-                            "Shared URL": final_shared_url,
-                            "Contact URL": final_contact_url,
                             "Phone": final_phone,
                             "Emails": ", ".join(final_emails) if final_emails else "",
                             "Social Links": "\n".join(final_social_links)
@@ -1246,20 +1232,23 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Phone", "Emails", "Social Links"]
+                    maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Phone", "Emails", "Social Links"]
                     df_maps = df_maps[maps_columns]
                     df_maps_display = df_maps.copy()
                     df_maps_display["Domain"] = df_maps_display["Domain"].apply(
                         lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
                     )
+                    df_maps_styled = df_maps_display.style.set_properties(
+                        subset=["Company"],
+                        **{"font-weight": "bold", "white-space": "pre-line"}
+                    )
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(
-                        df_maps_display,
+                        df_maps_styled,
                         use_container_width=True,
                         hide_index=True,
                         column_config={
                             "Domain": st.column_config.LinkColumn("Domain"),
-                            "Shared URL": st.column_config.LinkColumn("Shared URL"),
                             "Social Links": st.column_config.TextColumn("Social Links", width="large"),
                             "Company": st.column_config.TextColumn("Company", width="large"),
                         },
@@ -1283,20 +1272,23 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Phone", "Emails", "Social Links"]
+                maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Phone", "Emails", "Social Links"]
                 df_maps = df_maps[maps_columns]
                 df_maps_display = df_maps.copy()
                 df_maps_display["Domain"] = df_maps_display["Domain"].apply(
                     lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
                 )
+                df_maps_styled = df_maps_display.style.set_properties(
+                    subset=["Company"],
+                    **{"font-weight": "bold", "white-space": "pre-line"}
+                )
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(
-                    df_maps_display,
+                    df_maps_styled,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
                         "Domain": st.column_config.LinkColumn("Domain"),
-                        "Shared URL": st.column_config.LinkColumn("Shared URL"),
                         "Social Links": st.column_config.TextColumn("Social Links", width="large"),
                         "Company": st.column_config.TextColumn("Company", width="large"),
                     },
