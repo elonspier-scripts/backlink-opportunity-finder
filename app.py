@@ -1247,6 +1247,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                         df_maps_styled,
                         use_container_width=True,
                         hide_index=True,
+                        row_height=56,
                         column_config={
                             "Domain": st.column_config.LinkColumn("Domain"),
                             "Social Links": st.column_config.TextColumn("Social Links", width="large"),
@@ -1287,6 +1288,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                     df_maps_styled,
                     use_container_width=True,
                     hide_index=True,
+                    row_height=56,
                     column_config={
                         "Domain": st.column_config.LinkColumn("Domain"),
                         "Social Links": st.column_config.TextColumn("Social Links", width="large"),
