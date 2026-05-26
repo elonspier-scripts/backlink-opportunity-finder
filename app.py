@@ -160,30 +160,18 @@ target_domain = st.sidebar.selectbox("Google Domein", ["google.nl", "google.be",
 
 # --- MAPS TOGGLE ---
 st.sidebar.divider()
-st.sidebar.header("📍 Lokale Leads (Google Maps)")
-use_maps = st.sidebar.toggle("Activeer Google Maps Scraper", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
+st.sidebar.header("📍 Local Business Leads")
+use_maps = st.sidebar.toggle("Find local leads", value=False, help="Zoek direct naar lokale bedrijven op de kaart inclusief contactgegevens.")
 maps_max_results = 10
-maps_enable_contact_fallback = False
-maps_enable_business_listing_fallback = False
 
 if use_maps:
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
-    maps_enable_business_listing_fallback = st.sidebar.toggle(
-        "Enable Business Listing fallback",
-        value=True,
-        help="Vul ontbrekende Maps velden aan via DataForSEO Business Listings."
-    )
-    maps_enable_contact_fallback = st.sidebar.toggle(
-        "Enable website contact fallback",
-        value=False,
-        help="When enabled, enrich missing contact URL, email, and social links from the website."
-    )
-    st.sidebar.info("Maps runs on DataForSEO. Business Listing fallback is API-only and efficient.")
+    st.sidebar.info("Maps runs on DataForSEO with automatic API-first fallback.")
 
 # --- SEARCH TOGGLE ---
 st.sidebar.divider()
-st.sidebar.header("📡 Google Search Scraper")
-use_serp = st.sidebar.toggle("Activeer Google Search Scraper", value=True, help="Zoek breed in de Google zoekresultaten naar partnerpagina's.")
+st.sidebar.header("📡 Online Business Leads")
+use_serp = st.sidebar.toggle("Find relevant Business leads", value=True, help="Zoek breed in de Google zoekresultaten naar partnerpagina's.")
 
 if use_serp:
     pages = st.sidebar.slider("Aantal pagina's diep (Google Search)", 1, 3, 2)
@@ -1101,44 +1089,43 @@ if st.button("🚀 Start Analyse", type="primary"):
                         final_social_links = sorted(set(maps_social_links or []))
                         matched_listing = None
 
-                        if maps_enable_business_listing_fallback:
-                            needs_listing_fallback = (
-                                not final_website
-                                or not final_shared_url
-                                or not final_contact_url
-                                or not final_address
-                                or final_category == "Unknown"
-                                or final_phone == "N/A"
-                                or not title
-                            )
-                            if needs_listing_fallback:
-                                listing_key = ((item.get('title') or '').strip().lower(), maps_location_code)
-                                if listing_key not in business_listing_cache:
-                                    try:
-                                        business_listing_cache[listing_key] = fetch_business_listing_candidates(
-                                            company_title=item.get('title') or '',
-                                            location_code=maps_location_code,
-                                            login=dfs_login,
-                                            password=dfs_password,
-                                            limit=25,
-                                        )
-                                    except Exception:
-                                        business_listing_cache[listing_key] = []
+                        needs_listing_fallback = (
+                            not final_website
+                            or not final_shared_url
+                            or not final_contact_url
+                            or not final_address
+                            or final_category == "Unknown"
+                            or final_phone == "N/A"
+                            or not title
+                        )
+                        if needs_listing_fallback:
+                            listing_key = ((item.get('title') or '').strip().lower(), maps_location_code)
+                            if listing_key not in business_listing_cache:
+                                try:
+                                    business_listing_cache[listing_key] = fetch_business_listing_candidates(
+                                        company_title=item.get('title') or '',
+                                        location_code=maps_location_code,
+                                        login=dfs_login,
+                                        password=dfs_password,
+                                        limit=25,
+                                    )
+                                except Exception:
+                                    business_listing_cache[listing_key] = []
 
-                                matched_listing = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
-                                if matched_listing:
-                                    if not final_website:
-                                        final_website = matched_listing.get("url", "")
-                                    if not final_shared_url:
-                                        final_shared_url = matched_listing.get("url", "")
-                                    if not final_contact_url:
-                                        final_contact_url = matched_listing.get("url", "")
-                                    if final_phone == "N/A" and matched_listing.get("phone"):
-                                        final_phone = matched_listing["phone"]
-                                    if not final_address and matched_listing.get("address"):
-                                        final_address = matched_listing["address"]
-                                    if final_category == "Unknown" and matched_listing.get("category"):
-                                        final_category = matched_listing["category"]
+                            matched_listing = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
+                            if matched_listing:
+                                if not final_website:
+                                    final_website = matched_listing.get("url", "")
+                                if not final_shared_url:
+                                    final_shared_url = matched_listing.get("url", "")
+                                if not final_contact_url:
+                                    final_contact_url = matched_listing.get("url", "")
+                                if final_phone == "N/A" and matched_listing.get("phone"):
+                                    final_phone = matched_listing["phone"]
+                                if not final_address and matched_listing.get("address"):
+                                    final_address = matched_listing["address"]
+                                if final_category == "Unknown" and matched_listing.get("category"):
+                                    final_category = matched_listing["category"]
 
                         dom = extract_domain(final_website)
                         if not dom:
@@ -1148,7 +1135,7 @@ if st.button("🚀 Start Analyse", type="primary"):
 
                         st.write(f"Maps Bedrijf gevonden: **{title or dom}**. Partner-check...")
 
-                        if maps_enable_contact_fallback and final_website:
+                        if final_website:
                             needs_fallback = not final_contact_url or not final_emails or not final_social_links or final_phone == "N/A"
                             if needs_fallback:
                                 fallback_contacts = enrich_contacts_from_website(final_website)
@@ -1172,6 +1159,7 @@ if st.button("🚀 Start Analyse", type="primary"):
 
                         maps_row = {
                             "Company": final_company,
+                            "Summary": item.get('summary') or "No description",
                             "Category": final_category,
                             "Keyword": maps_kw,
                             "Domain": dom,
@@ -1182,8 +1170,6 @@ if st.button("🚀 Start Analyse", type="primary"):
                             "Emails": ", ".join(final_emails) if final_emails else "",
                             "Social Links": ", ".join(final_social_links)
                         }
-                        if maps_enable_contact_fallback:
-                            maps_row["Summary"] = item.get('summary') or "No description"
 
                         maps_opportunities.append(maps_row)
                         existing.add(dom)
@@ -1257,9 +1243,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    maps_columns = ["Company", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]
-                    if maps_enable_contact_fallback:
-                        maps_columns.insert(1, "Summary")
+                    maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]
                     df_maps = df_maps[maps_columns]
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(df_maps, use_container_width=True)
@@ -1282,9 +1266,7 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                maps_columns = ["Company", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]
-                if maps_enable_contact_fallback:
-                    maps_columns.insert(1, "Summary")
+                maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Shared URL", "Contact URL", "Address", "Phone", "Emails", "Social Links"]
                 df_maps = df_maps[maps_columns]
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(df_maps, use_container_width=True)
