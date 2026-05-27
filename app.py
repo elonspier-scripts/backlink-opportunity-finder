@@ -179,17 +179,21 @@ if use_serp:
 
 st.sidebar.divider()
 st.sidebar.header("🔗 Outbound Link Checks")
+outbound_checks_available = use_serp
 check_404_outbound = st.sidebar.toggle(
     "Check 404 outgoing links",
-    value=True,
-    help="Controleer alleen content-links op de gevonden partnerpagina en markeer 404 links."
+    value=False,
+    help="Controleer alleen content-links op de gevonden partnerpagina en markeer 404 links.",
+    disabled=not outbound_checks_available,
 )
+if not outbound_checks_available:
+    check_404_outbound = False
 max_outbound_checks = st.sidebar.slider(
     "Max outgoing links checked per page",
     5,
     60,
     25,
-    disabled=not check_404_outbound
+    disabled=not outbound_checks_available or not check_404_outbound,
 )
 
 # --- PARTNER TERMEN ---
@@ -1287,7 +1291,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                         if not final_company:
                             final_company = dom
 
-                        confidence_label, confidence_points = classify_match_confidence(match_score)
+                        _, confidence_points = classify_match_confidence(match_score)
                         ratings_display = format_rating_display(final_rating_value, final_rating_count)
                         ratings_present = bool(ratings_display)
                         lead_score = compute_lead_score(
@@ -1321,7 +1325,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                             "Ratings": ratings_display,
                             "Phone": final_phone,
                             "Emails": ", ".join(final_emails) if final_emails else "",
-                            "Match Confidence": f"{confidence_label} (+{confidence_points})",
+                            "Match Confidence": confidence_points,
                             "Missing Fields": ", ".join(missing_fields) if missing_fields else "-",
                             "Social Links Raw": final_social_links,
                         }
@@ -1421,18 +1425,30 @@ if st.button("🚀 Start Analyse", type="primary"):
                     df_maps_styled = df_maps_display.style.set_properties(
                         subset=["Company"],
                         **{"font-weight": "bold"}
+                    ).background_gradient(
+                        cmap="RdYlGn",
+                        subset=["Lead Score"],
+                        vmin=0,
+                        vmax=100,
+                    ).background_gradient(
+                        cmap="RdYlGn",
+                        subset=["Match Confidence"],
+                        vmin=5,
+                        vmax=15,
                     )
                     map_column_config = {
+                        "Lead Score": st.column_config.NumberColumn("Lead Score", format="%d"),
+                        "Match Confidence": st.column_config.NumberColumn("Match Confidence", format="%d"),
                         "Domain": st.column_config.LinkColumn("Domain"),
-                        "Company": st.column_config.TextColumn("Company", width="large"),
-                        "Address": st.column_config.TextColumn("Address", width="large"),
+                        "Company": st.column_config.TextColumn("Company"),
+                        "Address": st.column_config.TextColumn("Address"),
                     }
                     for social_col in social_columns:
                         map_column_config[social_col] = st.column_config.LinkColumn(social_col)
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(
                         df_maps_styled,
-                        use_container_width=True,
+                        use_container_width=False,
                         hide_index=True,
                         column_config=map_column_config,
                     )
@@ -1465,18 +1481,30 @@ if st.button("🚀 Start Analyse", type="primary"):
                 df_maps_styled = df_maps_display.style.set_properties(
                     subset=["Company"],
                     **{"font-weight": "bold"}
+                ).background_gradient(
+                    cmap="RdYlGn",
+                    subset=["Lead Score"],
+                    vmin=0,
+                    vmax=100,
+                ).background_gradient(
+                    cmap="RdYlGn",
+                    subset=["Match Confidence"],
+                    vmin=5,
+                    vmax=15,
                 )
                 map_column_config = {
+                    "Lead Score": st.column_config.NumberColumn("Lead Score", format="%d"),
+                    "Match Confidence": st.column_config.NumberColumn("Match Confidence", format="%d"),
                     "Domain": st.column_config.LinkColumn("Domain"),
-                    "Company": st.column_config.TextColumn("Company", width="large"),
-                    "Address": st.column_config.TextColumn("Address", width="large"),
+                    "Company": st.column_config.TextColumn("Company"),
+                    "Address": st.column_config.TextColumn("Address"),
                 }
                 for social_col in social_columns:
                     map_column_config[social_col] = st.column_config.LinkColumn(social_col)
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(
                     df_maps_styled,
-                    use_container_width=True,
+                    use_container_width=False,
                     hide_index=True,
                     column_config=map_column_config,
                 )
