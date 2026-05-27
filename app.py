@@ -779,6 +779,136 @@ def normalize_phone_value(value):
         return ""
     return candidate
 
+def normalize_url_value(value):
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith(("http://", "https://")):
+        return candidate
+    return f"https://{candidate}"
+
+def normalize_rating_value(value):
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{num:.1f}".rstrip("0").rstrip(".")
+
+def normalize_rating_count(value):
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return ""
+    return str(count) if count >= 0 else ""
+
+def format_rating_display(value, count):
+    rating_value = normalize_rating_value(value)
+    rating_count = normalize_rating_count(count)
+    if rating_value and rating_count:
+        return f"{rating_value} ({rating_count})"
+    if rating_value:
+        return rating_value
+    if rating_count:
+        return f"{rating_count} reviews"
+    return ""
+
+def classify_match_confidence(score):
+    if score >= 60:
+        return "High", 15
+    if score >= 30:
+        return "Medium", 10
+    return "Low", 5
+
+def has_business_email(email_values):
+    free_domains = {
+        "gmail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com", "proton.me", "protonmail.com"
+    }
+    for email in email_values or []:
+        candidate = str(email or "").strip().lower()
+        if "@" not in candidate:
+            continue
+        domain = candidate.rsplit("@", 1)[-1]
+        if domain and domain not in free_domains:
+            return True
+    return False
+
+def compute_lead_score(website, phone, emails, social_links, ratings_present, confidence_points):
+    score = 0
+    if website:
+        score += 20
+    if phone and phone != "N/A":
+        score += 15
+    if emails:
+        score += 20
+    if has_business_email(emails):
+        score += 10
+    if social_links:
+        score += 10
+    if ratings_present:
+        score += 10
+    score += confidence_points
+    return min(score, 100)
+
+def detect_social_platform(url):
+    host = extract_domain(url)
+    platform_map = {
+        "instagram.com": "Instagram",
+        "linkedin.com": "LinkedIn",
+        "facebook.com": "Facebook",
+        "youtube.com": "YouTube",
+        "youtu.be": "YouTube",
+        "tiktok.com": "TikTok",
+        "x.com": "X",
+        "twitter.com": "X",
+        "pinterest.com": "Pinterest",
+        "reddit.com": "Reddit",
+        "threads.net": "Threads",
+    }
+    for domain, label in platform_map.items():
+        if host == domain or host.endswith("." + domain):
+            return label
+    return "Other Social"
+
+def explode_social_links_rows(rows):
+    social_slots = {}
+    for row in rows:
+        grouped = {}
+        for raw in row.get("Social Links Raw", []):
+            link = normalize_url_value(raw)
+            if not link:
+                continue
+            platform = detect_social_platform(link)
+            grouped.setdefault(platform, []).append(link)
+        for platform, links in grouped.items():
+            social_slots[platform] = max(social_slots.get(platform, 0), len(links))
+        row["_social_grouped"] = grouped
+
+    preferred_order = ["Instagram", "LinkedIn", "Facebook", "YouTube", "TikTok", "X", "Pinterest", "Reddit", "Threads", "Other Social"]
+    ordered_platforms = [name for name in preferred_order if name in social_slots]
+    ordered_platforms.extend(sorted(name for name in social_slots if name not in ordered_platforms))
+
+    social_columns = []
+    for platform in ordered_platforms:
+        count = social_slots.get(platform, 0)
+        if count <= 1:
+            social_columns.append(platform)
+        else:
+            for idx in range(1, count + 1):
+                social_columns.append(f"{platform} {idx}")
+
+    for row in rows:
+        grouped = row.pop("_social_grouped", {})
+        for platform in ordered_platforms:
+            links = grouped.get(platform, [])
+            count = social_slots.get(platform, 0)
+            if count <= 1:
+                row[platform] = links[0] if links else ""
+            else:
+                for idx in range(1, count + 1):
+                    row[f"{platform} {idx}"] = links[idx - 1] if idx - 1 < len(links) else ""
+
+    return social_columns
+
 def extract_phone_candidates_from_soup(soup):
     phones = set()
     for link in soup.find_all('a', href=True):
@@ -912,6 +1042,7 @@ def normalize_business_listing_item(item):
     phone = normalize_phone_value(item.get("phone") or "")
     address = (item.get("address") or "").strip()
     city = normalize_name_for_match((item.get("address_info") or {}).get("city") or extract_city_from_address(address))
+    rating = item.get("rating") or {}
 
     return {
         "title": title,
@@ -921,6 +1052,8 @@ def normalize_business_listing_item(item):
         "address": address,
         "city": city,
         "category": item.get("category") or "",
+        "rating_value": (rating or {}).get("value"),
+        "rating_count": (rating or {}).get("votes_count"),
     }
 
 def fetch_business_listing_candidates(company_title, location_code, login, password, limit=25):
@@ -949,7 +1082,7 @@ def fetch_business_listing_candidates(company_title, location_code, login, passw
 
 def pick_best_business_listing_match(maps_item, candidates):
     if not candidates:
-        return None
+        return None, 0
 
     maps_domain = extract_domain(maps_item.get("website") or "")
     maps_phone = normalize_phone_value(maps_item.get("phone") or "")
@@ -973,8 +1106,8 @@ def pick_best_business_listing_match(maps_item, candidates):
             best_match = row
 
     if best_score < 20:
-        return None
-    return best_match
+        return None, best_score
+    return best_match, best_score
 
 def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, login, password):
     rows = []
@@ -995,17 +1128,19 @@ def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, 
             task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
             for result in (task or {}).get("result") or []:
                 for item in (result or {}).get("items") or []:
+                    rating = item.get("rating") or {}
                     rows.append(
                         {
                             "searchString": task_keyword,
                             "title": item.get("title") or item.get("name"),
-                            "summary": build_maps_summary(item),
                             "website": normalize_maps_website(item),
                             "address": item.get("address") or "",
                             "categoryName": item.get("category") or item.get("main_category") or "Onbekend",
                             "phone": item.get("phone") or item.get("phone_unformatted") or "",
                             "emails": as_list(item.get("emails")),
                             "socialProfiles": as_list(item.get("socials")),
+                            "ratingValue": (rating or {}).get("value"),
+                            "ratingCount": (rating or {}).get("votes_count"),
                         }
                     )
     return rows
@@ -1083,7 +1218,10 @@ if st.button("🚀 Start Analyse", type="primary"):
                         final_phone = maps_phone if maps_phone else "N/A"
                         final_emails = maps_emails
                         final_social_links = sorted(set(maps_social_links or []))
+                        final_rating_value = item.get("ratingValue")
+                        final_rating_count = item.get("ratingCount")
                         matched_listing = None
+                        match_score = 0
 
                         needs_listing_fallback = (
                             not final_website
@@ -1106,7 +1244,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                                 except Exception:
                                     business_listing_cache[listing_key] = []
 
-                            matched_listing = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
+                            matched_listing, match_score = pick_best_business_listing_match(item, business_listing_cache.get(listing_key, []))
                             if matched_listing:
                                 if not final_website:
                                     final_website = matched_listing.get("url", "")
@@ -1116,6 +1254,10 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     final_address = matched_listing["address"]
                                 if final_category == "Unknown" and matched_listing.get("category"):
                                     final_category = matched_listing["category"]
+                                if not normalize_rating_value(final_rating_value):
+                                    final_rating_value = matched_listing.get("rating_value")
+                                if not normalize_rating_count(final_rating_count):
+                                    final_rating_count = matched_listing.get("rating_count")
 
                         dom = extract_domain(final_website)
                         if not dom:
@@ -1145,19 +1287,43 @@ if st.button("🚀 Start Analyse", type="primary"):
                         if not final_company:
                             final_company = dom
 
-                        company_with_address = final_company
-                        if final_address:
-                            company_with_address = f"{final_company}\n{final_address}"
+                        confidence_label, confidence_points = classify_match_confidence(match_score)
+                        ratings_display = format_rating_display(final_rating_value, final_rating_count)
+                        ratings_present = bool(ratings_display)
+                        lead_score = compute_lead_score(
+                            website=final_website,
+                            phone=final_phone,
+                            emails=final_emails,
+                            social_links=final_social_links,
+                            ratings_present=ratings_present,
+                            confidence_points=confidence_points,
+                        )
+
+                        missing_fields = []
+                        if not final_address:
+                            missing_fields.append("Address")
+                        if final_phone == "N/A":
+                            missing_fields.append("Phone")
+                        if not final_emails:
+                            missing_fields.append("Emails")
+                        if not ratings_present:
+                            missing_fields.append("Ratings")
+                        if not final_social_links:
+                            missing_fields.append("Social Links")
 
                         maps_row = {
-                            "Company": company_with_address,
-                            "Summary": item.get('summary') or "No description",
+                            "Lead Score": lead_score,
+                            "Company": final_company,
+                            "Address": final_address,
                             "Category": final_category,
                             "Keyword": maps_kw,
                             "Domain": dom,
+                            "Ratings": ratings_display,
                             "Phone": final_phone,
                             "Emails": ", ".join(final_emails) if final_emails else "",
-                            "Social Links": "\n".join(final_social_links)
+                            "Match Confidence": f"{confidence_label} (+{confidence_points})",
+                            "Missing Fields": ", ".join(missing_fields) if missing_fields else "-",
+                            "Social Links Raw": final_social_links,
                         }
 
                         maps_opportunities.append(maps_row)
@@ -1222,6 +1388,19 @@ if st.button("🚀 Start Analyse", type="primary"):
 
             status.update(label="Analyse voltooid!", state="complete")
 
+        social_columns = explode_social_links_rows(maps_opportunities) if maps_opportunities else []
+        maps_columns = [
+            "Lead Score",
+            "Company",
+            "Address",
+            "Category",
+            "Keyword",
+            "Domain",
+            "Ratings",
+            "Phone",
+            "Emails",
+        ] + social_columns + ["Match Confidence", "Missing Fields"]
+
         # ========================================================
         # 5. RESULTATEN WEERGAVE
         # ========================================================
@@ -1232,27 +1411,30 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
-                    maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Phone", "Emails", "Social Links"]
                     df_maps = df_maps[maps_columns]
                     df_maps_display = df_maps.copy()
                     df_maps_display["Domain"] = df_maps_display["Domain"].apply(
                         lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
                     )
+                    for social_col in social_columns:
+                        df_maps_display[social_col] = df_maps_display[social_col].apply(normalize_url_value)
                     df_maps_styled = df_maps_display.style.set_properties(
                         subset=["Company"],
-                        **{"font-weight": "bold", "white-space": "pre-line"}
+                        **{"font-weight": "bold"}
                     )
+                    map_column_config = {
+                        "Domain": st.column_config.LinkColumn("Domain"),
+                        "Company": st.column_config.TextColumn("Company", width="large"),
+                        "Address": st.column_config.TextColumn("Address", width="large"),
+                    }
+                    for social_col in social_columns:
+                        map_column_config[social_col] = st.column_config.LinkColumn(social_col)
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(
                         df_maps_styled,
                         use_container_width=True,
                         hide_index=True,
-                        row_height=56,
-                        column_config={
-                            "Domain": st.column_config.LinkColumn("Domain"),
-                            "Social Links": st.column_config.TextColumn("Social Links", width="large"),
-                            "Company": st.column_config.TextColumn("Company", width="large"),
-                        },
+                        column_config=map_column_config,
                     )
                     st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_tabs")
                 else:
@@ -1273,27 +1455,30 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📍 Google Maps Resultaten")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
-                maps_columns = ["Company", "Summary", "Category", "Keyword", "Domain", "Phone", "Emails", "Social Links"]
                 df_maps = df_maps[maps_columns]
                 df_maps_display = df_maps.copy()
                 df_maps_display["Domain"] = df_maps_display["Domain"].apply(
                     lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
                 )
+                for social_col in social_columns:
+                    df_maps_display[social_col] = df_maps_display[social_col].apply(normalize_url_value)
                 df_maps_styled = df_maps_display.style.set_properties(
                     subset=["Company"],
-                    **{"font-weight": "bold", "white-space": "pre-line"}
+                    **{"font-weight": "bold"}
                 )
+                map_column_config = {
+                    "Domain": st.column_config.LinkColumn("Domain"),
+                    "Company": st.column_config.TextColumn("Company", width="large"),
+                    "Address": st.column_config.TextColumn("Address", width="large"),
+                }
+                for social_col in social_columns:
+                    map_column_config[social_col] = st.column_config.LinkColumn(social_col)
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(
                     df_maps_styled,
                     use_container_width=True,
                     hide_index=True,
-                    row_height=56,
-                    column_config={
-                        "Domain": st.column_config.LinkColumn("Domain"),
-                        "Social Links": st.column_config.TextColumn("Social Links", width="large"),
-                        "Company": st.column_config.TextColumn("Company", width="large"),
-                    },
+                    column_config=map_column_config,
                 )
                 st.download_button("Download Maps Leads (CSV)", df_maps.to_csv(index=False), "maps_leads.csv", "text/csv", key="maps_btn_single")
             else:
