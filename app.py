@@ -1422,23 +1422,9 @@ if st.button("🚀 Start Analyse", type="primary"):
                     )
                     for social_col in social_columns:
                         df_maps_display[social_col] = df_maps_display[social_col].apply(normalize_url_value)
-                    df_maps_styled = df_maps_display.style.set_properties(
-                        subset=["Company"],
-                        **{"font-weight": "bold"}
-                    ).background_gradient(
-                        cmap="RdYlGn",
-                        subset=["Lead Score"],
-                        vmin=0,
-                        vmax=100,
-                    ).background_gradient(
-                        cmap="RdYlGn",
-                        subset=["Match Confidence"],
-                        vmin=5,
-                        vmax=15,
-                    )
                     map_column_config = {
-                        "Lead Score": st.column_config.NumberColumn("Lead Score", format="%d"),
-                        "Match Confidence": st.column_config.NumberColumn("Match Confidence", format="%d"),
+                        "Lead Score": st.column_config.ProgressColumn("Lead Score", min_value=0, max_value=100, format="%d"),
+                        "Match Confidence": st.column_config.ProgressColumn("Match Confidence", min_value=5, max_value=15, format="%d"),
                         "Domain": st.column_config.LinkColumn("Domain"),
                         "Company": st.column_config.TextColumn("Company"),
                         "Address": st.column_config.TextColumn("Address"),
@@ -1447,7 +1433,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                         map_column_config[social_col] = st.column_config.LinkColumn(social_col)
                     st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                     st.dataframe(
-                        df_maps_styled,
+                        df_maps_display,
                         use_container_width=False,
                         hide_index=True,
                         column_config=map_column_config,
@@ -1478,23 +1464,9 @@ if st.button("🚀 Start Analyse", type="primary"):
                 )
                 for social_col in social_columns:
                     df_maps_display[social_col] = df_maps_display[social_col].apply(normalize_url_value)
-                df_maps_styled = df_maps_display.style.set_properties(
-                    subset=["Company"],
-                    **{"font-weight": "bold"}
-                ).background_gradient(
-                    cmap="RdYlGn",
-                    subset=["Lead Score"],
-                    vmin=0,
-                    vmax=100,
-                ).background_gradient(
-                    cmap="RdYlGn",
-                    subset=["Match Confidence"],
-                    vmin=5,
-                    vmax=15,
-                )
                 map_column_config = {
-                    "Lead Score": st.column_config.NumberColumn("Lead Score", format="%d"),
-                    "Match Confidence": st.column_config.NumberColumn("Match Confidence", format="%d"),
+                    "Lead Score": st.column_config.ProgressColumn("Lead Score", min_value=0, max_value=100, format="%d"),
+                    "Match Confidence": st.column_config.ProgressColumn("Match Confidence", min_value=5, max_value=15, format="%d"),
                     "Domain": st.column_config.LinkColumn("Domain"),
                     "Company": st.column_config.TextColumn("Company"),
                     "Address": st.column_config.TextColumn("Address"),
@@ -1503,7 +1475,7 @@ if st.button("🚀 Start Analyse", type="primary"):
                     map_column_config[social_col] = st.column_config.LinkColumn(social_col)
                 st.success(f"{len(df_maps)} Lokale bedrijven gevonden!")
                 st.dataframe(
-                    df_maps_styled,
+                    df_maps_display,
                     use_container_width=False,
                     hide_index=True,
                     column_config=map_column_config,
