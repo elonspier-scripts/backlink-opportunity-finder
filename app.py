@@ -166,7 +166,6 @@ maps_max_results = 10
 
 if use_maps:
     maps_max_results = st.sidebar.slider("Max leads per keyword", 5, 50, 10)
-    st.sidebar.info("Maps runs on DataForSEO with automatic API-first fallback.")
 
 # --- SEARCH TOGGLE ---
 st.sidebar.divider()
@@ -1410,12 +1409,13 @@ if st.button("🚀 Start Analyse", type="primary"):
         # ========================================================
         # Als ze ALLEBEI aan staan, gebruiken we tabbladen (Dit is visueel veel beter dan kolommen omdat de tabellen breed zijn)
         if use_maps and use_serp:
-            tab1, tab2 = st.tabs(["📍 Google Maps Resultaten", "📡 Google Search Resultaten"])
+            tab1, tab2 = st.tabs(["Local Leads results", "📡 Google Search Resultaten"])
             
             with tab1:
                 if maps_opportunities:
                     df_maps = pd.DataFrame(maps_opportunities)
                     df_maps = df_maps[maps_columns]
+                    df_maps = df_maps.sort_values(by="Lead Score", ascending=False)
                     df_maps_display = df_maps.copy()
                     df_maps_display["Domain"] = df_maps_display["Domain"].apply(
                         lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
@@ -1454,10 +1454,11 @@ if st.button("🚀 Start Analyse", type="primary"):
         
         # Als ALLEEN Maps aan staat
         elif use_maps and not use_serp:
-            st.subheader("📍 Google Maps Resultaten")
+            st.subheader("Local Leads results")
             if maps_opportunities:
                 df_maps = pd.DataFrame(maps_opportunities)
                 df_maps = df_maps[maps_columns]
+                df_maps = df_maps.sort_values(by="Lead Score", ascending=False)
                 df_maps_display = df_maps.copy()
                 df_maps_display["Domain"] = df_maps_display["Domain"].apply(
                     lambda x: "" if not str(x or "").strip() else (str(x) if str(x).startswith(("http://", "https://")) else f"https://{x}")
