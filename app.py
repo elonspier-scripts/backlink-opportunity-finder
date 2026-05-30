@@ -990,12 +990,25 @@ def get_dataforseo_organic_results(keywords, target_domain, pages, login, passwo
     language_code = DATAFORSEO_LANGUAGE_CODE_BY_DOMAIN.get(target_domain, "en")
     organic_rows = []
 
+    def _build_payload(query):
+        payload = {
+            "keyword": query,
+            "se_domain": target_domain,
+            "language_code": language_code,
+            "depth": pages * 10
+        }
+        if location_code:
+            payload["location_code"] = location_code
+        return payload
+
     # Build task payloads. If partner_terms provided, expand queries per term.
     tasks = []
+    fallback_tasks = []
     for keyword in keywords:
         kw_str = str(keyword).strip()
         if not kw_str:
             continue
+        fallback_tasks.append(_build_payload(kw_str))
         if partner_terms:
             for term in partner_terms:
                 term_s = str(term).strip()
@@ -1003,53 +1016,48 @@ def get_dataforseo_organic_results(keywords, target_domain, pages, login, passwo
                     continue
                 # compact variant
                 query = f'{kw_str} (intitle:"{term_s}" OR inurl:"{term_s}" OR intext:"{term_s}")'
-                payload = {
-                    "keyword": query,
-                    "se_domain": target_domain,
-                    "language_code": language_code,
-                    "depth": pages * 10
-                }
-                if location_code:
-                    payload["location_code"] = location_code
-                tasks.append(payload)
+                tasks.append(_build_payload(query))
         else:
-            payload = {
-                "keyword": kw_str,
-                "se_domain": target_domain,
-                "language_code": language_code,
-                "depth": pages * 10
-            }
-            if location_code:
-                payload["location_code"] = location_code
-            tasks.append(payload)
+            tasks.append(_build_payload(kw_str))
 
     # Batch request to DataForSEO
     if not tasks:
         return organic_rows
 
+    def _collect_rows(task_results):
+        rows = []
+        for task in task_results or []:
+            task_keyword = (task or {}).get("data", {}).get("keyword", "")
+            for result in (task or {}).get("result") or []:
+                for item in (result or {}).get("items") or []:
+                    url = item.get("url") or item.get("target") or item.get("domain")
+                    if not url:
+                        continue
+                    url = normalize_serp_result_url(url)
+                    if not url:
+                        continue
+                    rows.append({
+                        "keyword": task_keyword,
+                        "url": url,
+                        "title": item.get("title", ""),
+                        "organic_traffic": int((
+                            item.get("etv")
+                            or item.get("estimated_traffic")
+                            or item.get("organic_traffic")
+                            or 0
+                        ) or 0)
+                    })
+        return rows
+
     # DataForSEO allows multiple tasks in one call
     task_results = dataforseo_post("/serp/google/organic/live/advanced", tasks, login, password)
-    for task in task_results or []:
-        task_keyword = (task or {}).get("data", {}).get("keyword", "")
-        for result in (task or {}).get("result") or []:
-            for item in (result or {}).get("items") or []:
-                url = item.get("url") or item.get("target") or item.get("domain")
-                if not url:
-                    continue
-                url = normalize_serp_result_url(url)
-                if not url:
-                    continue
-                organic_rows.append({
-                    "keyword": task_keyword,
-                    "url": url,
-                    "title": item.get("title", ""),
-                    "organic_traffic": int((
-                        item.get("etv")
-                        or item.get("estimated_traffic")
-                        or item.get("organic_traffic")
-                        or 0
-                    ) or 0)
-                })
+    organic_rows = _collect_rows(task_results)
+
+    # Safety fallback: if operator-based queries return no rows, retry with plain keywords.
+    if not organic_rows and partner_terms and fallback_tasks:
+        fallback_results = dataforseo_post("/serp/google/organic/live/advanced", fallback_tasks, login, password)
+        organic_rows = _collect_rows(fallback_results)
+
     return organic_rows
 
 
