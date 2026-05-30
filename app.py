@@ -662,6 +662,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
         "contact_url": "",
         "ai": None,
         "emails": "",
+        "phones": "",
         "Omschrijving": "Geen beschrijving",
         "social_links": [],
         "brokenLinks": []
@@ -692,6 +693,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
 
         page_text_parts = [soup.get_text()]
         emails = set(extract_emails_from_soup(soup))
+        phones = set(extract_phone_candidates_from_soup(soup))
 
         for page_url in [u for u in [contact_url] if u]:
             try:
@@ -700,6 +702,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
                 page_soup = BeautifulSoup(res_page.text, 'html.parser')
                 page_text_parts.append(page_soup.get_text())
                 emails.update(extract_emails_from_soup(page_soup))
+                phones.update(extract_phone_candidates_from_soup(page_soup))
                 if check_404 and page_url == analysis_url:
                     result_data["brokenLinks"] = find_404_outbound_links(page_soup, page_url, max_link_checks)
             except Exception:
@@ -724,6 +727,7 @@ def process_site(home_url, ai_client, search_terms, target_keyword, force_summar
         result_data["url"] = analysis_url
         result_data["ai"] = ai_res
         result_data["emails"] = ", ".join(sorted(emails)[:3])
+        result_data["phones"] = ", ".join(sorted(phones)[:3])
         
         return result_data
     except:
@@ -976,35 +980,103 @@ def enrich_contacts_from_website(home_url):
         return enriched
     return enriched
 
-def get_dataforseo_organic_results(keywords, target_domain, pages, login, password, location_code=None):
+def get_dataforseo_organic_results(keywords, target_domain, pages, login, password, location_code=None, partner_terms=None):
+    """
+    Fetch organic results from DataForSEO.
+    If partner_terms is provided (list of strings), build compact operator queries for each keyword+term:
+      "{keyword} (intitle:"{term}" OR inurl:"{term}" OR intext:"{term}")"
+    and request them from DataForSEO.
+    """
     language_code = DATAFORSEO_LANGUAGE_CODE_BY_DOMAIN.get(target_domain, "en")
     organic_rows = []
+
+    # Build task payloads. If partner_terms provided, expand queries per term.
+    tasks = []
     for keyword in keywords:
-        payload = {
-            "keyword": keyword,
-            "se_domain": target_domain,
-            "language_code": language_code,
-            "depth": pages * 10
-        }
-        if location_code:
-            payload["location_code"] = location_code
-        task_results = dataforseo_post("/serp/google/organic/live/advanced", [payload], login, password)
-        for task in task_results or []:
-            task_keyword = (task or {}).get("data", {}).get("keyword", keyword)
-            for result in (task or {}).get("result") or []:
-                for item in (result or {}).get("items") or []:
-                    url = item.get("url") or item.get("target") or item.get("domain")
-                    if not url:
-                        continue
-                    url = normalize_serp_result_url(url)
-                    if not url:
-                        continue
-                    organic_rows.append({
-                        "keyword": task_keyword,
-                        "url": url,
-                        "title": item.get("title", "")
-                    })
+        kw_str = str(keyword).strip()
+        if not kw_str:
+            continue
+        if partner_terms:
+            for term in partner_terms:
+                term_s = str(term).strip()
+                if not term_s:
+                    continue
+                # compact variant
+                query = f'{kw_str} (intitle:"{term_s}" OR inurl:"{term_s}" OR intext:"{term_s}")'
+                payload = {
+                    "keyword": query,
+                    "se_domain": target_domain,
+                    "language_code": language_code,
+                    "depth": pages * 10
+                }
+                if location_code:
+                    payload["location_code"] = location_code
+                tasks.append(payload)
+        else:
+            payload = {
+                "keyword": kw_str,
+                "se_domain": target_domain,
+                "language_code": language_code,
+                "depth": pages * 10
+            }
+            if location_code:
+                payload["location_code"] = location_code
+            tasks.append(payload)
+
+    # Batch request to DataForSEO
+    if not tasks:
+        return organic_rows
+
+    # DataForSEO allows multiple tasks in one call
+    task_results = dataforseo_post("/serp/google/organic/live/advanced", tasks, login, password)
+    for task in task_results or []:
+        task_keyword = (task or {}).get("data", {}).get("keyword", "")
+        for result in (task or {}).get("result") or []:
+            for item in (result or {}).get("items") or []:
+                url = item.get("url") or item.get("target") or item.get("domain")
+                if not url:
+                    continue
+                url = normalize_serp_result_url(url)
+                if not url:
+                    continue
+                organic_rows.append({
+                    "keyword": task_keyword,
+                    "url": url,
+                    "title": item.get("title", ""),
+                    "organic_traffic": int((
+                        item.get("etv")
+                        or item.get("estimated_traffic")
+                        or item.get("organic_traffic")
+                        or 0
+                    ) or 0)
+                })
     return organic_rows
+
+
+def build_domain_traffic_map_from_organic_rows(organic_rows):
+    """
+    Build per-domain traffic estimate from already collected DataForSEO organic rows.
+    Uses average per-domain traffic value from row-level traffic fields (etv/estimated traffic).
+    """
+    buckets = {}
+    for row in organic_rows or []:
+        domain = extract_domain(row.get("url", ""))
+        if not domain:
+            continue
+        traffic = row.get("organic_traffic", 0)
+        try:
+            traffic_num = int(float(traffic or 0))
+        except (TypeError, ValueError):
+            traffic_num = 0
+        buckets.setdefault(domain, []).append(traffic_num)
+
+    traffic_map = {}
+    for domain, values in buckets.items():
+        if not values:
+            traffic_map[domain] = 0
+            continue
+        traffic_map[domain] = int(round(sum(values) / len(values)))
+    return traffic_map
 
 def normalize_maps_website(item):
     website = item.get("website") or item.get("domain") or ""
@@ -1154,7 +1226,6 @@ def fetch_maps_places(keywords, location_code, language_code, depth, se_domain, 
 if st.button("🚀 Start Analyse", type="primary"):
     manual_keywords = [k.strip() for k in keywords_area.split('\n') if k.strip()]
     keywords = list(dict.fromkeys(manual_keywords))
-    keyword_volumes = {kw: 0 for kw in manual_keywords}
     maps_location_code = maps_location_code_selected
 
     if not oa_token:
@@ -1184,6 +1255,7 @@ if st.button("🚀 Start Analyse", type="primary"):
         
         maps_opportunities = []
         search_opportunities = []
+        organic_results = []
         business_listing_cache = {}
 
         with st.status("Bezig met scrapen en analyseren...", expanded=True) as status:
@@ -1346,7 +1418,8 @@ if st.button("🚀 Start Analyse", type="primary"):
                         pages=pages,
                         login=dfs_login,
                         password=dfs_password,
-                        location_code=search_location_code_selected
+                        location_code=search_location_code_selected,
+                        partner_terms=PARTNER_TERMS
                     )
                     
                     st.write("🔎 Search domeinen scannen en analyseren...")
@@ -1375,9 +1448,9 @@ if st.button("🚀 Start Analyse", type="primary"):
                                     "Omschrijving": analysis['Omschrijving'],
                                     "Category": kw,
                                     "Keyword": kw,
-                                    "Search Volume": keyword_volumes.get(kw, 0),
+                                    # Domain Organic Traffic will be enriched after collection
                                     "Domain": dom,
-                                    "Telefoon": "N/A",
+                                    "Telefoon": analysis.get('phones', '') or "",
                                     "Emails": analysis['emails'],
                                     "Social Links": ", ".join(analysis['social_links']) if analysis['social_links'] else "",
                                     "Partner URL": analysis['url'],
@@ -1390,6 +1463,9 @@ if st.button("🚀 Start Analyse", type="primary"):
                     st.error(f"Google Search call mislukt (DataForSEO): {e}")
 
             status.update(label="Analyse voltooid!", state="complete")
+
+        # --- Enrich domains with organic traffic (DataForSEO) for search opportunities ---
+        domain_traffic = build_domain_traffic_map_from_organic_rows(organic_results if use_serp else [])
 
         social_columns = explode_social_links_rows(maps_opportunities) if maps_opportunities else []
         maps_columns = [
@@ -1445,7 +1521,8 @@ if st.button("🚀 Start Analyse", type="primary"):
             with tab2:
                 if search_opportunities:
                     df_search = pd.DataFrame(search_opportunities)
-                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                    df_search['Domain Organic Traffic'] = df_search['Domain'].apply(lambda d: domain_traffic.get(d, 0))
+                    df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Domain Organic Traffic", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
                     st.success(f"{len(df_search)} Search leads gevonden!")
                     st.dataframe(df_search, use_container_width=True)
                     st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_tabs")
@@ -1490,7 +1567,9 @@ if st.button("🚀 Start Analyse", type="primary"):
             st.subheader("📡 Google Search Resultaten")
             if search_opportunities:
                 df_search = pd.DataFrame(search_opportunities)
-                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Search Volume", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
+                # ensure Domain Organic Traffic column exists using earlier enrichment
+                df_search['Domain Organic Traffic'] = df_search['Domain'].apply(lambda d: domain_traffic.get(d, 0))
+                df_search = df_search[["Bedrijf", "Omschrijving", "Category", "Keyword", "Domain Organic Traffic", "Domain", "Telefoon", "Emails", "Social Links", "Partner URL", "Contact URL", "Score Linkbuilding", "Broken Outbound Links"]]
                 st.success(f"{len(df_search)} Search leads gevonden!")
                 st.dataframe(df_search, use_container_width=True)
                 st.download_button("Download Search Leads (CSV)", df_search.to_csv(index=False), "search_leads.csv", "text/csv", key="search_btn_single")
